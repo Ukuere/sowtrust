@@ -11,7 +11,7 @@ load_dotenv()
 class Config:
     # Africa's Talking
     AT_USERNAME: str = os.getenv("AT_USERNAME", "sandbox")
-    AT_API_KEY: str = os.getenv("AT_API_KEY", "")
+    AT_API_KEY: str = os.getenv("AT_API_KEY", "atsk_06a3c95cd309398544a17654a8ac9fb42792198309d9dbea1efd98ea8af34398603c5888")
 
     # Flask
     SECRET_KEY: str = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")
