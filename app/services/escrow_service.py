@@ -16,6 +16,7 @@ from app.services.sms_service import (
     notify_payment_released, notify_logistics
 )
 from app.services import payment_service
+from app.services import fee_service
 from config.settings import config
 
 
@@ -26,18 +27,30 @@ def _ref(prefix: str) -> str:
 # ── PHASE 1: BUYER PAYMENT COLLECTION ────────────────────────────────────
 
 def initiate_escrow_payment(buyer_phone: str, farmer_phone: str,
-                             crop: str, quantity_bags: int, amount: float) -> dict:
+                             crop: str, quantity_bags: int, product_amount: float,
+                             logistics_amount: float = 0.0) -> dict:
     """
     Buyer confirmed an order. We do NOT lock escrow yet — we generate a
     real one-time account for them to pay into first. Escrow only
     becomes real once Paystack confirms the money actually arrived
     (see confirm_payment_received, called from the webhook).
+
+    Three-sided fee model: the buyer is charged product_amount +
+    buyer_platform_fee (+ logistics_amount, once wired in) — NOT just
+    the raw product_amount. See fee_service.calculate_full_order().
     """
+    fees = fee_service.calculate_full_order(product_amount, logistics_amount)
+    buyer_total = fees["buyer_total"]
+
     reference = _ref("PAY")
     # USSD has no email field — Paystack just needs a unique identifier here.
-    pseudo_email = f"{buyer_phone.lstrip('+')}@sowtrust.ussd"
+    # Paystack validates email format strictly — ".ussd" isn't a real TLD
+    # and gets rejected. Use a real, valid-format domain instead (this
+    # email is never actually sent anything for the bank_transfer channel,
+    # it's just an identifier Paystack's API requires).
+    pseudo_email = f"{buyer_phone.lstrip('+')}@sowtrust.com"
 
-    charge = payment_service.initiate_bank_transfer_charge(pseudo_email, amount, reference)
+    charge = payment_service.initiate_bank_transfer_charge(pseudo_email, buyer_total, reference)
     if not charge["ok"]:
         return {"ok": False, "error": charge["error"]}
 
@@ -48,12 +61,23 @@ def initiate_escrow_payment(buyer_phone: str, farmer_phone: str,
             )
             conn.execute(
                 """INSERT INTO escrow_ledger
-                   (farmer_phone, buyer_phone, crop, quantity_bags, amount, service_fee,
+                   (farmer_phone, buyer_phone, crop, quantity_bags,
+                    amount, service_fee,
+                    product_amount, buyer_platform_fee, seller_platform_fee,
+                    logistics_amount, logistics_platform_fee,
+                    buyer_total, farmer_settlement_amount,
+                    logistics_settlement_amount, sowtrust_total_revenue,
                     release_code_hash, status, payment_reference,
                     virtual_account_number, virtual_account_bank)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING_PAYMENT', ?, ?, ?)""",
-                (farmer_phone, buyer_phone, crop, quantity_bags, amount,
-                 round(amount * config.SERVICE_FEE_PERCENT / 100, 2),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_PAYMENT', ?, ?, ?)""",
+                (farmer_phone, buyer_phone, crop, quantity_bags,
+                 # legacy columns, kept in sync for backward compatibility
+                 fees["product_amount"], fees["seller_platform_fee"],
+                 # new split fields
+                 fees["product_amount"], fees["buyer_platform_fee"], fees["seller_platform_fee"],
+                 fees["logistics_amount"], fees["logistics_platform_fee"],
+                 fees["buyer_total"], fees["farmer_settlement_amount"],
+                 fees["logistics_settlement_amount"], fees["sowtrust_total_revenue"],
                  "",  # release code generated only once payment is confirmed
                  reference, charge["account_number"], charge["bank_name"]),
             )
@@ -63,11 +87,14 @@ def initiate_escrow_payment(buyer_phone: str, farmer_phone: str,
             txn_id = row["txn_id"]
             conn.execute(
                 "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
-                (buyer_phone, "PAYMENT_INITIATED", f"TXN:{txn_id} REF:{reference} AMT:{amount}"),
+                (buyer_phone, "PAYMENT_INITIATED",
+                 f"TXN:{txn_id} REF:{reference} BUYER_TOTAL:{buyer_total} "
+                 f"PRODUCT:{fees['product_amount']} BUYER_FEE:{fees['buyer_platform_fee']} "
+                 f"SELLER_FEE:{fees['seller_platform_fee']}"),
             )
 
         return {
-            "ok": True, "txn_id": txn_id,
+            "ok": True, "txn_id": txn_id, "buyer_total": buyer_total,
             "account_number": charge["account_number"],
             "bank_name": charge["bank_name"],
         }
@@ -89,14 +116,14 @@ def confirm_payment_received(payment_reference: str, amount_paid: float) -> dict
     if row["status"] != "PENDING_PAYMENT":
         return {"ok": True, "note": f"Already {row['status']}, ignoring duplicate webhook"}
 
-    if amount_paid < row["amount"] - 1:  # tolerate rounding, not underpayment
+    if amount_paid < row["buyer_total"] - 1:  # tolerate rounding, not underpayment
         # Underpaid — do not lock escrow. Flag for manual review rather than
         # silently accepting a short payment.
         with get_db() as conn:
             conn.execute(
                 "UPDATE escrow_ledger SET status='DISPUTED' WHERE txn_id=?", (row["txn_id"],)
             )
-        return {"ok": False, "error": f"Underpaid: expected {row['amount']}, got {amount_paid}"}
+        return {"ok": False, "error": f"Underpaid: expected {row['buyer_total']}, got {amount_paid}"}
 
     release_code = generate_release_code()
     code_hash = hash_release_code(release_code)
@@ -145,7 +172,7 @@ def release_escrow(farmer_phone: str, txn_id: str, release_code: str) -> dict:
             "error": "No verified payout account on file. Dial *709# > 4 > 3 to add your bank/wallet account first."
         }
 
-    net_payout = row["amount"] - row["service_fee"]
+    net_payout = row["farmer_settlement_amount"]
     payout_ref = _ref("PAYOUT")
 
     recipient = payment_service.create_transfer_recipient(
@@ -190,7 +217,7 @@ def confirm_payout_success(transfer_code: str) -> dict:
     if not row:
         return {"ok": False, "error": "Unknown transfer reference"}
 
-    net_payout = row["amount"] - row["service_fee"]
+    net_payout = row["farmer_settlement_amount"]
     with get_db() as conn:
         conn.execute(
             "UPDATE escrow_ledger SET payout_status='success' WHERE txn_id=?", (row["txn_id"],)
@@ -282,7 +309,11 @@ def expire_stale_escrows() -> dict:
            WHERE status = 'ESCROW_LOCKED' AND expires_at < datetime('now')"""
     )
     for row in stale_locked:
-        refund = payment_service.initiate_refund(row["payment_reference"], row["amount"])
+        # Refund the FULL amount the buyer actually paid (buyer_total —
+        # product + their platform fee + logistics), not just the legacy
+        # `amount` field which only ever tracked the product portion.
+        refund_amount = row["buyer_total"] if row["buyer_total"] else row["amount"]
+        refund = payment_service.initiate_refund(row["payment_reference"], refund_amount)
         if refund["ok"]:
             with get_db() as conn:
                 conn.execute(
@@ -292,12 +323,12 @@ def expire_stale_escrows() -> dict:
                 conn.execute(
                     "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
                     ("system", "ESCROW_EXPIRED_REFUNDED",
-                     f"TXN:{row['txn_id']} AMT:{row['amount']}"),
+                     f"TXN:{row['txn_id']} AMT:{refund_amount}"),
                 )
             from app.services.sms_service import send_sms
             send_sms(row["buyer_phone"],
                      f"Sowtrust: Your order (TXN {row['txn_id']}) expired after 72 hours "
-                     f"without delivery confirmation. NGN {row['amount']:,.0f} has been refunded.")
+                     f"without delivery confirmation. NGN {refund_amount:,.0f} has been refunded.")
             send_sms(row["farmer_phone"],
                      f"Sowtrust: Your reserved sale (TXN {row['txn_id']}) expired after 72 "
                      f"hours — the release code was never used, so the order was cancelled "

@@ -66,6 +66,16 @@ CREATE TABLE IF NOT EXISTS buyers (
     created_at  TEXT    DEFAULT (datetime('now'))
 );
 
+-- ─── PLATFORM CONFIG (configurable fee percentages) ────────────────────────
+CREATE TABLE IF NOT EXISTS platform_config (
+    id                     INTEGER PRIMARY KEY CHECK (id = 1),
+    buyer_fee_percent      REAL NOT NULL DEFAULT 2.5,
+    seller_fee_percent     REAL NOT NULL DEFAULT 2.5,
+    logistics_fee_percent  REAL NOT NULL DEFAULT 2.5,
+    updated_at             TEXT DEFAULT (datetime('now')),
+    updated_by             TEXT
+);
+
 -- ─── ESCROW LEDGER ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS escrow_ledger (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,8 +84,18 @@ CREATE TABLE IF NOT EXISTS escrow_ledger (
     buyer_phone       TEXT    NOT NULL,
     crop              TEXT    NOT NULL,
     quantity_bags     INTEGER NOT NULL DEFAULT 1,
-    amount            REAL    NOT NULL,
-    service_fee       REAL    NOT NULL,
+    amount            REAL    NOT NULL,   -- legacy alias, kept in sync with product_amount
+    service_fee       REAL    NOT NULL,   -- legacy alias, kept in sync with seller_platform_fee
+    -- Three-sided fee model — see app/services/fee_service.py
+    product_amount               REAL,
+    buyer_platform_fee           REAL,
+    seller_platform_fee          REAL,
+    logistics_amount             REAL DEFAULT 0,
+    logistics_platform_fee       REAL DEFAULT 0,
+    buyer_total                  REAL,   -- what the buyer actually pays (product+buyer_fee+logistics)
+    farmer_settlement_amount     REAL,   -- what the farmer actually receives
+    logistics_settlement_amount  REAL DEFAULT 0,
+    sowtrust_total_revenue       REAL,   -- buyer_fee + seller_fee + logistics_fee
     release_code_hash TEXT    NOT NULL,
     status            TEXT    NOT NULL DEFAULT 'PENDING_PAYMENT',
                                 -- PENDING_PAYMENT | ESCROW_LOCKED | DELIVERED |
@@ -145,6 +165,10 @@ def init_db():
     print(f"[Sowtrust] Initialising database at: {db_path}")
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        conn.execute("""
+            INSERT OR IGNORE INTO platform_config (id, buyer_fee_percent, seller_fee_percent, logistics_fee_percent)
+            VALUES (1, 2.5, 2.5, 2.5)
+        """)
     print("[Sowtrust] ✅ Database schema created successfully.")
 
 

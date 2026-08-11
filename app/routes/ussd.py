@@ -27,6 +27,7 @@ from app.services.escrow_service import (
 from app.services.payment_service import (
     resolve_account_number, create_transfer_recipient, initiate_transfer
 )
+from app.services.fee_service import calculate_full_order
 from app.services.sms_service import send_sms, notify_logistics
 from app.services.product_service import (
     get_or_create_product, list_active_products, find_farmers_for_product
@@ -354,11 +355,10 @@ def ussd_handler():
 
                 chosen  = sess["chosen"]
                 qty     = int(qty_str)
-                total   = chosen["price"] * qty
-                fee     = round(total * config.SERVICE_FEE_PERCENT / 100, 2)
-                payable = total + fee
+                product_amount = chosen["price"] * qty
+                fees = calculate_full_order(product_amount)
 
-                sess.update({"qty": qty, "total": total, "fee": fee})
+                sess.update({"qty": qty, "total": product_amount, "fees": fees})
                 set_session(phone, sess)
 
                 return CON(
@@ -366,9 +366,9 @@ def ussd_handler():
                     f"Crop:    {sess['crop']}\n"
                     f"Farmer:  {chosen['name']}\n"
                     f"Bags:    {qty}\n"
-                    f"Goods:   NGN {total:,.0f}\n"
-                    f"Fee:     NGN {fee:,.0f} (2.5%)\n"
-                    f"TOTAL:   NGN {payable:,.0f}\n"
+                    f"Goods:   NGN {fees['product_amount']:,.0f}\n"
+                    f"Fee:     NGN {fees['buyer_platform_fee']:,.0f} (buyer fee)\n"
+                    f"TOTAL:   NGN {fees['buyer_total']:,.0f}\n"
                     f"──────────────────\n"
                     f"1. Confirm & Lock\n"
                     f"2. Cancel"
@@ -386,17 +386,17 @@ def ussd_handler():
 
                 chosen = sess["chosen"]
                 result = initiate_escrow_payment(
-                    buyer_phone   = phone,
-                    farmer_phone  = chosen["phone"],
-                    crop          = sess["crop"],
-                    quantity_bags = sess["qty"],
-                    amount        = sess["total"]
+                    buyer_phone    = phone,
+                    farmer_phone   = chosen["phone"],
+                    crop           = sess["crop"],
+                    quantity_bags  = sess["qty"],
+                    product_amount = sess["total"]
                 )
                 clear_session(phone)
 
                 if result["ok"]:
                     return END(
-                        f"Almost done! Transfer NGN {sess['total']:,.0f} to:\n"
+                        f"Almost done! Transfer NGN {result['buyer_total']:,.0f} to:\n"
                         f"Acct: {result['account_number']}\n"
                         f"Bank: {result['bank_name']}\n\n"
                         f"TXN: {result['txn_id']}\n"

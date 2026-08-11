@@ -72,13 +72,18 @@ def initiate_bank_transfer_charge(email: str, amount_naira: float, reference: st
         if not data.get("status"):
             return {"ok": False, "error": data.get("message", "Charge initiation failed")}
 
-        details = data["data"].get("bank_transfer", {}) or data["data"].get("account", {})
+        # Verified against Paystack's ACTUAL response shape (confirmed via
+        # live test call — their docs snippets didn't match this exactly):
+        # account_number and account_expires_at sit at the top level of
+        # `data`, and the bank name is nested under `data.bank.name`.
+        tx = data["data"]
+        bank_info = tx.get("bank", {}) or {}
         return {
             "ok": True,
-            "account_number": details.get("account_number"),
-            "bank_name": details.get("bank_name"),
-            "reference": data["data"].get("reference", reference),
-            "expires_at": details.get("account_expires_at"),
+            "account_number": tx.get("account_number"),
+            "bank_name": bank_info.get("name"),
+            "reference": tx.get("reference", reference),
+            "expires_at": tx.get("account_expires_at"),
         }
     except requests.RequestException as e:
         return {"ok": False, "error": f"Network error contacting Paystack: {e}"}

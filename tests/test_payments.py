@@ -100,11 +100,11 @@ def test_webhook_confirms_payment_and_locks_escrow(client):
 
     from app.models.database import fetchone
     row = fetchone(
-        "SELECT txn_id, amount, payment_reference FROM escrow_ledger "
+        "SELECT txn_id, buyer_total, payment_reference FROM escrow_ledger "
         "WHERE buyer_phone=? ORDER BY locked_at DESC LIMIT 1",
         ("+2348099991111",)
     )
-    amount = row["amount"]
+    amount = row["buyer_total"]   # buyer now pays product + buyer_platform_fee, not just product
     real_reference = row["payment_reference"]
 
     # Simulate the real webhook Paystack would send
@@ -177,8 +177,13 @@ def test_full_settlement_flow_with_verified_bank(client):
     execute(
         """INSERT INTO escrow_ledger
            (farmer_phone, buyer_phone, crop, quantity_bags, amount, service_fee,
+            product_amount, buyer_platform_fee, seller_platform_fee, farmer_settlement_amount,
+            buyer_total, sowtrust_total_revenue,
             release_code_hash, status)
-           VALUES (?, 'buyer1', 'Bitter Leaf', 5, 7500, 187.5, ?, 'ESCROW_LOCKED')""",
+           VALUES (?, 'buyer1', 'Bitter Leaf', 5, 7500, 187.5,
+                   7500, 187.5, 187.5, 7312.5,
+                   7687.5, 375,
+                   ?, 'ESCROW_LOCKED')""",
         (phone, hash_release_code("XYZ999")),
     )
 
@@ -193,7 +198,7 @@ def test_full_settlement_flow_with_verified_bank(client):
         result = release_escrow(phone, active["txn_id"], "XYZ999")
 
     assert result["ok"] is True
-    assert result["net_payout"] == 7500 - 187.5
+    assert result["net_payout"] == 7312.5  # farmer_settlement_amount (product - seller fee)
 
     row = fetchone("SELECT * FROM escrow_ledger WHERE txn_id=?", (active["txn_id"],))
     assert row["status"] == "DELIVERED"

@@ -1,56 +1,44 @@
-# 🌱 Sowtrust
+# 🌾 AgriHub Global v6.0
 **USSD-Based Agricultural Escrow & Logistics Ecosystem**
-*Growing Trust. Connecting Markets.*
 
----
 
 ## Folder Structure
 ```
-sowtrust/
+agrihub/
 ├── app/
-│   ├── __init__.py               # Flask app factory
+│   ├── __init__.py           # Flask app factory
 │   ├── routes/
-│   │   ├── ussd.py               # All USSD portal logic
-│   │   └── webhooks.py           # Paystack payment/transfer webhooks
+│   │   └── ussd.py           # All USSD portal logic
 │   ├── models/
-│   │   └── database.py           # DB connection manager
+│   │   └── database.py       # DB connection manager
 │   ├── services/
-│   │   ├── escrow_service.py     # Escrow lock/release engine (real settlement)
-│   │   ├── payment_service.py    # Paystack collection, payout, refund wrapper
-│   │   ├── product_service.py    # Dynamic, farmer-entered product catalog
-│   │   └── sms_service.py        # Africa's Talking SMS wrapper
+│   │   ├── escrow_service.py # Escrow lock/release engine
+│   │   └── sms_service.py    # Africa's Talking SMS wrapper
 │   └── utils/
-│       └── security.py           # PIN hashing, session mgmt
+│       └── security.py       # PIN hashing, session mgmt
 ├── dashboard/
-│   └── app.py                    # Streamlit CEO console
+│   └── app.py                # Streamlit CEO console
 ├── migrations/
-│   ├── init_db.py                # Full schema (fresh installs)
-│   ├── add_products_table.py     # Adds dynamic product catalog
-│   └── add_payments_columns.py   # Adds Paystack payment/payout columns
+│   └── init_db.py            # Database schema setup
 ├── config/
-│   └── settings.py               # Central config (env vars)
+│   └── settings.py           # Central config (env vars)
 ├── scripts/
-│   ├── seed_demo_data.py         # Demo data seeder
-│   └── run_expiry_job.py         # Escrow expiry + auto-refund (run via cron)
+│   └── seed_demo_data.py     # Demo data seeder
 ├── tests/
-│   ├── test_ussd.py              # Core USSD flow tests
-│   ├── test_payments.py          # Payment collection/settlement tests
-│   └── test_expiry.py            # Escrow expiry job tests
-├── run.py                        # Flask entry point
-├── Procfile                      # Deployment (Railway)
+│   └── test_ussd.py          # Test suite
+├── run.py                    # Flask entry point
+├── Procfile                  # Deployment (Heroku/Railway)
 ├── requirements.txt
 ├── .env.example
 └── .gitignore
 ```
 
----
-
 ## Quick Start (Local)
 
 ### 1. Clone & Setup
 ```bash
-git clone https://github.com/Ukuere/sowtrust.git
-cd sowtrust
+git clone <your-repo>
+cd agrihub
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -59,14 +47,12 @@ pip install -r requirements.txt
 ### 2. Configure Environment
 ```bash
 cp .env.example .env
-# Edit .env — add your Africa's Talking API key and Paystack test keys
+# Edit .env — add your Africa's Talking API key
 ```
 
 ### 3. Initialise Database
 ```bash
 python migrations/init_db.py
-python migrations/add_products_table.py
-python migrations/add_payments_columns.py
 ```
 
 ### 4. (Optional) Seed Demo Data
@@ -87,50 +73,29 @@ ngrok http 5000
 # Set your AT callback URL to: https://<ngrok-url>/ussd
 ```
 
-### 7. Set Paystack Webhook (for payment testing)
-```
-# In Paystack dashboard > Settings > API Keys & Webhooks:
-https://<ngrok-url>/webhooks/paystack
-```
-
-### 8. Run Dashboard
+### 7. Run Dashboard
 ```bash
 streamlit run dashboard/app.py
 # Opens at http://localhost:8501
 # Default password: changeme (set in .env)
 ```
 
-### 9. Run Tests
-```bash
-python -m pytest tests/ -v
-```
 
----
+## Production Deployment (Railway / Render / VPS)
 
-## Production Deployment (Railway)
-
-### Web service
+### Railway
 ```bash
 railway login
 railway init
 railway up
-# Set env vars in Railway dashboard, including PAYSTACK_SECRET_KEY
+# Set env vars in Railway dashboard
 ```
 
-### Escrow expiry job — separate Railway Cron service
-Deliberately NOT run inside the web process (Procfile runs 4 gunicorn
-workers — an in-process scheduler would duplicate itself 4x).
-- New Railway service → Cron Job
-- Command: `python scripts/run_expiry_job.py`
-- Schedule: `*/15 * * * *` (every 15 minutes)
-- Same env vars as the web service
-
-### Gunicorn (VPS alternative)
+### Gunicorn (VPS)
 ```bash
 gunicorn -w 4 -b 0.0.0.0:5000 "run:app"
 ```
 
----
 
 ## USSD Flow (*709#)
 
@@ -139,35 +104,23 @@ gunicorn -w 4 -b 0.0.0.0:5000 "run:app"
 | Main | 1 | Farmer Portal |
 | Main | 2 | Buyer Portal |
 | Main | 3 | Logistics |
-| Main | 4 | Wallet / PIN / Bank Account |
-| Main | 5 | Withdraw Funds (legacy/manual balance only) |
+| Main | 4 | Wallet / PIN |
+| Main | 5 | Withdraw Funds |
 | Main | 6 | Agent Portal |
 
-### Real Escrow Flow (Paystack-backed)
+### Escrow Flow
 ```
-Farmer dials *709# → 1 → 1
-  → Types ANY product name (not a fixed list)
-  → Sets price → 4 → 3: adds verified bank/wallet account
-
-Buyer dials *709# → 2 → 1
-  → Types or picks a product → Selects farmer → Qty → Confirm
-  → Gets a ONE-TIME bank account number to transfer into
-  → [Paystack webhook confirms payment landed]
-  → ESCROW LOCKED — SMS to farmer, release code sent to buyer
+Buyer dials *709# → 2 → 2
+  → Select crop → Farmer phone → Qty
+  → Confirm → ESCROW LOCKED
+  → SMS to farmer (funds locked)
+  → Release code sent to buyer
 
 Farmer dials *709# → 1 → 3
-  → Enter PIN → Enter release code (given by buyer on delivery)
-  → Real Paystack transfer fires to farmer's verified account
-  → [Paystack webhook confirms transfer landed]
-  → SMS: payment received
+  → Enter PIN → Enter release code
+  → PAYMENT RELEASED to wallet
 ```
 
-### Escrow Expiry (automatic, via cron)
-- Unpaid orders older than 60 minutes → auto-cancelled (no money moved yet)
-- Locked escrows past 72 hours with no delivery confirmation →
-  buyer automatically refunded, both parties notified by SMS
-
----
 
 ## Security
 - PIN stored as SHA-256 hash (never plaintext)
@@ -175,31 +128,23 @@ Farmer dials *709# → 1 → 3
 - USSD sessions expire after 120 seconds
 - Full audit trail on every action
 - ACID-compliant database (WAL mode)
-- Paystack webhooks verified via HMAC-SHA512 signature — unsigned/forged
-  webhook calls are rejected, never trusted
-- Farmer payout accounts verified by name (Paystack account resolution)
-  before being saved, to prevent misdirected payouts
 
----
 
 ## All Farmer Portals
-- Register (name, ANY crop/product by name, location, PIN)
+- Register (name, crop, location, PIN)
 - Update price listing
-- Release escrow with code (triggers real payout)
+- Release escrow with code
 - View transaction history
-- Add/update verified bank or digital wallet payout account
 
 ## All Buyer Portals
-- Search farmers by product — pick from what's currently listed, or type
-  any product name to search
-- Pay into escrow via real one-time bank transfer
-- Post crop request for products with no current sellers
+- Search farmers by crop (sorted cheapest first)
+- Lock escrow payment
+- Post crop request
 
 ## Agent Portals
 - Register as field agent
 - Verify farmer KYC
 - View recruit count
 
----
 
 *Built by Promise Ukuere — Optimistic World Enterprise Ltd*
