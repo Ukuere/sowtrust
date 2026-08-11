@@ -28,6 +28,10 @@ from app.services.payment_service import (
     resolve_account_number, create_transfer_recipient, initiate_transfer
 )
 from app.services.fee_service import calculate_full_order
+from app.services.logistics_service import (
+    register_provider, get_provider, get_available_jobs, assign_provider,
+    confirm_delivery, save_provider_bank_account, commit_provider_bank_account
+)
 from app.services.sms_service import send_sms, notify_logistics
 from app.services.product_service import (
     get_or_create_product, list_active_products, find_farmers_for_product
@@ -471,10 +475,18 @@ def ussd_handler():
     # ══════════════════════════════════════════════════════════════════════
     elif choice == "3":
         if level == 1:
-            return CON("Logistics\n1. Track Shipment\n2. Dispatch Goods")
+            return CON(
+                "Logistics\n"
+                "1. Track Shipment\n"
+                "2. Register as Provider\n"
+                "3. Available Jobs\n"
+                "4. Confirm Delivery\n"
+                "5. Add Bank Account"
+            )
 
         sub = steps[1]
 
+        # 3.1 Track a shipment (open to anyone with the TXN ID)
         if sub == "1":
             if level == 2: return CON("Enter TXN ID:")
             if level == 3:
@@ -492,40 +504,119 @@ def ussd_handler():
                     f"Dispatched: {row['dispatched_at'] or 'Pending'}"
                 )
 
+        # 3.2 Provider registration
         elif sub == "2":
-            if level == 2: return CON("Enter TXN ID to Dispatch:")
-            if level == 3: return CON("Enter Courier Name:")
-            if level == 4: return CON("Enter Courier Phone:")
-            if level == 5: return CON("Enter Origin Location:")
-            if level == 6: return CON("Enter Destination Location:")
+            if level == 2: return CON("Enter Your Full Name:")
+            if level == 3: return CON("Enter Operating Area (e.g. Lagos-Ibadan):")
+            if level == 4: return CON("Enter Vehicle Type (e.g. Truck, Van, Bike):")
+            if level == 5: return CON("Set 4-digit PIN:")
+            if level == 6: return CON("Confirm PIN:")
             if level == 7:
-                txn_id        = steps[2].upper()
-                courier_name  = steps[3]
-                courier_phone = steps[4]
-                origin        = steps[5]
-                dest          = steps[6]
-                escrow = fetchone(
-                    "SELECT * FROM escrow_ledger WHERE txn_id=?", (txn_id,)
+                if steps[5] != steps[6]:
+                    return END("PINs do not match. Dial *709# to retry.")
+                result = register_provider(
+                    phone=phone, name=steps[2], operating_area=steps[3],
+                    vehicle_type=steps[4], pin=steps[5]
                 )
-                if not escrow:
-                    return END("No escrow found for this TXN ID.")
-                with get_db() as conn:
-                    conn.execute(
-                        """INSERT INTO logistics_log
-                           (txn_id, courier_name, courier_phone,
-                            origin, destination, status, dispatched_at)
-                           VALUES (?,?,?,?,?,'IN_TRANSIT',datetime('now'))""",
-                        (txn_id, courier_name, courier_phone, origin, dest)
-                    )
-                notify_logistics(
-                    courier_phone, origin, dest, escrow["crop"], txn_id
-                )
+                if not result["ok"]:
+                    return END(result["error"])
                 return END(
-                    f"Dispatch Logged!\n"
-                    f"Courier: {courier_name}\n"
-                    f"Route: {origin} to {dest}\n"
-                    f"SMS sent to courier."
+                    f"Registered! Welcome {steps[2]}.\n"
+                    f"An agent will verify you shortly.\n"
+                    f"Next: dial *709# > 3 > 5 to add your\n"
+                    f"bank account so you can be paid."
                 )
+
+        # 3.3 Browse and accept available jobs
+        elif sub == "3":
+            if level == 2:
+                jobs = get_available_jobs(limit=5)
+                if not jobs:
+                    return END("No delivery jobs available right now.\nCheck back soon.")
+                job_map = {str(i + 1): dict(j) for i, j in enumerate(jobs)}
+                set_session(phone, {"jobs": job_map})
+                lines = [
+                    f"{i+1}. {j['origin']}>{j['destination']} "
+                    f"NGN{j['settlement_amount']:,.0f}"
+                    for i, j in enumerate(jobs)
+                ]
+                return CON("Available Jobs:\n" + "\n".join(lines) + "\n\nEnter number to accept:")
+            if level == 3:
+                sess = get_session(phone)
+                job = (sess.get("jobs") or {}).get(steps[2])
+                if not job:
+                    return END("Invalid selection. Dial *709# to retry.")
+                clear_session(phone)
+                result = assign_provider(job["txn_id"], phone)
+                if not result["ok"]:
+                    return END(result["error"])
+                return END(
+                    f"Job accepted!\nTXN: {job['txn_id']}\n"
+                    f"Route: {job['origin']} to {job['destination']}\n"
+                    f"You earn NGN {result['settlement_amount']:,.0f} on delivery.\n"
+                    f"Collect the delivery code from the buyer\n"
+                    f"AFTER handing over the goods."
+                )
+
+        # 3.4 Confirm delivery with the buyer's code -> triggers real payout
+        elif sub == "4":
+            if level == 2: return CON("Enter TXN ID:")
+            if level == 3: return CON("Enter Delivery Code from Buyer:")
+            if level == 4: return CON("Enter your PIN:")
+            if level == 5:
+                provider = get_provider(phone)
+                if not provider or not verify_pin(steps[4], provider["pin_hash"]):
+                    return END("Invalid PIN or provider account not found.")
+                result = confirm_delivery(phone, steps[2].upper(), steps[3].strip().upper())
+                if not result["ok"]:
+                    return END(f"Failed: {result['error']}")
+                return END(
+                    f"Delivery confirmed!\n"
+                    f"NGN {result['settlement_amount']:,.0f} is being sent to\n"
+                    f"your bank/wallet account now.\n"
+                    f"You'll get an SMS once it lands."
+                )
+
+        # 3.5 Add/verify provider payout account
+        elif sub == "5":
+            bank_lines = "\n".join(f"{k}. {v['name']}" for k, v in config.BANKS.items())
+            if level == 2: return CON(f"Select Bank/Wallet:\n{bank_lines}")
+            if level == 3: return CON("Enter Account Number (10 digits):")
+            if level == 4: return CON("Enter PIN to confirm:")
+            if level == 5:
+                provider = get_provider(phone)
+                if not provider or not verify_pin(steps[4], provider["pin_hash"]):
+                    return END("Invalid PIN or provider account not found.")
+                bank = config.BANKS.get(steps[2])
+                if not bank:
+                    return END("Invalid bank selection.")
+                acct = steps[3].strip()
+                if len(acct) != 10 or not acct.isdigit():
+                    return END("Account number must be exactly 10 digits.")
+                result = save_provider_bank_account(phone, bank["code"], acct)
+                if not result["ok"]:
+                    return END(f"Could not verify that account: {result['error']}")
+                set_session(phone, {
+                    "p_bank": bank["name"], "p_bank_code": bank["code"],
+                    "p_acct": acct, "p_name": result["account_name"],
+                })
+                return CON(
+                    f"Account Name: {result['account_name']}\n"
+                    f"Bank: {bank['name']}\n\n"
+                    f"Is this YOU?\n1. Yes, save\n2. No, cancel"
+                )
+            if level == 6:
+                sess = get_session(phone)
+                if not sess or "p_acct" not in sess:
+                    return END("Session expired. Dial *709# to start again.")
+                if steps[5] != "1":
+                    clear_session(phone)
+                    return END("Cancelled. No account was saved.")
+                commit_provider_bank_account(
+                    phone, sess["p_bank_code"], sess["p_acct"], sess["p_name"]
+                )
+                clear_session(phone)
+                return END(f"Saved! Payouts will go to:\n{sess['p_name']}\n{sess['p_bank']}")
 
     # ══════════════════════════════════════════════════════════════════════
     #  PORTAL 4 — WALLET / PIN
@@ -709,7 +800,8 @@ def ussd_handler():
                 "Agent Portal\n"
                 "1. Register as Agent\n"
                 "2. Verify Farmer KYC\n"
-                "3. View My Recruits"
+                "3. View My Recruits\n"
+                "4. Verify Logistics Provider"
             )
 
         sub = steps[1]
@@ -795,5 +887,40 @@ def ussd_handler():
                     f"Farmers Verified: {agent['recruits']}\n"
                     f"Balance: NGN {agent['balance']:,.0f}"
                 )
+
+        # 6.4 Verify a logistics provider — same trust model as farmers.
+        # Providers can't accept jobs or be paid until an agent verifies them.
+        elif sub == "4":
+            if level == 2: return CON("Enter Agent PIN:")
+            if level == 3:
+                agent = _agent(phone)
+                if not agent or not verify_pin(steps[2], agent["pin_hash"]):
+                    return END("Invalid Agent PIN.")
+                return CON("Enter Provider Phone Number to Verify:")
+            if level == 4:
+                provider_phone = steps[3].strip()
+                provider = fetchone(
+                    "SELECT * FROM logistics_providers WHERE phone=?", (provider_phone,)
+                )
+                if not provider:
+                    return END(
+                        "Provider not found.\n"
+                        "Ask them to register via *709# > 3 > 2."
+                    )
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE logistics_providers SET kyc_status='VERIFIED' WHERE phone=?",
+                        (provider_phone,)
+                    )
+                    conn.execute(
+                        "INSERT INTO audit_log(actor,action,details) VALUES(?,?,?)",
+                        (phone, "LOGISTICS_KYC_VERIFIED", f"Provider:{provider_phone}")
+                    )
+                send_sms(
+                    provider_phone,
+                    f"Sowtrust: {provider['name']}, your logistics account is VERIFIED!\n"
+                    f"View jobs: *709# > 3 > 3"
+                )
+                return END(f"Provider {provider['name']} is now VERIFIED.")
 
     return END("Invalid option. Dial *709# to start again.")

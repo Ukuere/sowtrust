@@ -126,16 +126,63 @@ CREATE TABLE IF NOT EXISTS buyer_requests (
     created_at   TEXT    DEFAULT (datetime('now'))
 );
 
+-- ─── LOGISTICS PROVIDERS ───────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS logistics_providers (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider_uuid   TEXT NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
+    name            TEXT NOT NULL,
+    business_name   TEXT,
+    phone           TEXT NOT NULL UNIQUE,
+    email           TEXT,
+    address         TEXT,
+    operating_area  TEXT,
+    pin_hash        TEXT NOT NULL,
+    vehicle_type         TEXT,
+    vehicle_registration TEXT,
+    vehicle_capacity_kg  REAL,
+    bank_code            TEXT,
+    bank_account_number  TEXT,
+    bank_account_name    TEXT,
+    bank_verified_at     TEXT,
+    kyc_status      TEXT DEFAULT 'PENDING',   -- PENDING | VERIFIED | SUSPENDED
+    is_active       INTEGER DEFAULT 1,
+    completed_jobs  INTEGER DEFAULT 0,
+    rating          REAL DEFAULT 0.0,
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_logistics_providers_phone ON logistics_providers(phone);
+
+-- ─── DELIVERY CODE ATTEMPTS (audit trail for every verification try) ───────
+CREATE TABLE IF NOT EXISTS delivery_code_attempts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    logistics_id  TEXT,
+    txn_id        TEXT,
+    attempted_by  TEXT,
+    success       INTEGER NOT NULL DEFAULT 0,
+    reason        TEXT,
+    created_at    TEXT DEFAULT (datetime('now'))
+);
+
 -- ─── LOGISTICS LOG ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS logistics_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     logistics_id        TEXT    NOT NULL UNIQUE DEFAULT (upper(substr(hex(randomblob(6)),1,8))),
     txn_id              TEXT    REFERENCES escrow_ledger(txn_id),
-    courier_name        TEXT,
-    courier_phone       TEXT,
+    provider_id         INTEGER REFERENCES logistics_providers(id),
+    courier_name        TEXT,   -- legacy, superseded by provider_id
+    courier_phone       TEXT,   -- legacy, superseded by provider_id
     origin              TEXT,
     destination         TEXT,
-    status              TEXT    DEFAULT 'PENDING',  -- PENDING | IN_TRANSIT | DELIVERED
+    status              TEXT    DEFAULT 'PENDING',
+                                -- PENDING | QUOTED | ASSIGNED | IN_TRANSIT | DELIVERED
+    quote_amount        REAL,
+    platform_fee        REAL,
+    settlement_amount   REAL,
+    delivery_code_hash     TEXT,
+    delivery_code_used_at  TEXT,
+    payout_reference       TEXT,
+    payout_status          TEXT,
+    confirmed_at           TEXT,
     dispatched_at       TEXT,
     delivery_timestamp  TEXT,
     created_at          TEXT    DEFAULT (datetime('now'))

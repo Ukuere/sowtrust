@@ -13,6 +13,7 @@ Set this URL in your Paystack dashboard under Settings > API Keys & Webhooks:
 from flask import Blueprint, request, jsonify
 from app.services.payment_service import verify_webhook_signature
 from app.services import escrow_service
+from app.services import logistics_service
 
 webhooks_bp = Blueprint("webhooks", __name__)
 
@@ -37,11 +38,17 @@ def paystack_webhook():
 
     elif event_type == "transfer.success":
         transfer_code = data.get("transfer_code")
-        escrow_service.confirm_payout_success(transfer_code)
+        # A transfer could be either a farmer settlement OR a logistics
+        # provider settlement — try farmer first, fall through to logistics.
+        result = escrow_service.confirm_payout_success(transfer_code)
+        if not result.get("ok"):
+            logistics_service.confirm_payout_success(transfer_code)
 
     elif event_type == "transfer.failed" or event_type == "transfer.reversed":
         transfer_code = data.get("transfer_code")
-        escrow_service.mark_payout_failed(transfer_code, event_type)
+        result = escrow_service.mark_payout_failed(transfer_code, event_type)
+        if not result.get("ok"):
+            logistics_service.mark_payout_failed(transfer_code, event_type)
 
     elif event_type == "refund.processed":
         # Confirms a buyer refund (triggered by expire_stale_escrows) actually
