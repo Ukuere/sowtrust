@@ -1,5 +1,5 @@
 """
-AgriHub Global — CEO Command Console v6.0
+Sowtrust Global — CEO Command Console v6.0
 Run: streamlit run dashboard/app.py
 """
 import sqlite3
@@ -20,7 +20,7 @@ from config.settings import config
 # PAGE CONFIG
 # ─────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="AgriHub — CEO Console",
+    page_title="Sowtrust — CEO Console",
     layout="wide",
     page_icon="🌾",
     initial_sidebar_state="expanded",
@@ -57,7 +57,7 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
-    st.markdown("<h1 style='color:#4ade80;text-align:center;margin-top:80px'>🌾 AgriHub CEO Console</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='color:#4ade80;text-align:center;margin-top:80px'>🌾 Sowtrust CEO Console</h1>", unsafe_allow_html=True)
     col = st.columns([1, 2, 1])[1]
     with col:
         pwd = st.text_input("Enter Admin Password", type="password")
@@ -134,7 +134,7 @@ farmers_df, agents_df, escrow_df, requests_df, audit_df, logistics_df = load_dat
 # SIDEBAR
 # ─────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("<h2 style='color:#4ade80;text-align:center'>🌾 AgriHub</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='color:#4ade80;text-align:center'>🌾 Sowtrust</h2>", unsafe_allow_html=True)
     st.markdown("<p style='color:#64748b;text-align:center;font-size:.8rem'>CEO Console v6.0</p>", unsafe_allow_html=True)
     st.divider()
     page = st.radio(
@@ -166,7 +166,7 @@ st.markdown(
     f"""
 <div style="background:linear-gradient(135deg,#064e3b,#0a0f1a,#1e3a5f);
             padding:1.5rem 2rem;border-radius:12px;border:1px solid #166534;margin-bottom:1.5rem">
-  <h1 style="color:#4ade80;margin:0;font-size:1.8rem">🌾 AgriHub — {page[2:]}</h1>
+  <h1 style="color:#4ade80;margin:0;font-size:1.8rem">🌾 Sowtrust — {page[2:]}</h1>
   <p style="color:#64748b;margin:4px 0 0 0;font-size:.85rem">{datetime.now().strftime("%A, %d %B %Y  %H:%M")}</p>
 </div>
 """,

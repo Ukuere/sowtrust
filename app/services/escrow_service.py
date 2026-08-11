@@ -1,65 +1,131 @@
 """
-AgriHub — Escrow Service.
-Handles the full lifecycle: lock → verify → release / expire / dispute.
+Sowtrust — Escrow Service.
+
+Real money lifecycle (not simulated):
+  initiate_escrow_payment  -> buyer gets a one-time account to transfer into
+  confirm_payment_received -> [webhook] money actually landed -> ESCROW_LOCKED
+  release_escrow           -> farmer enters code -> real Paystack transfer fires
+  confirm_payout_success   -> [webhook] money actually landed in farmer's account
+  mark_payout_failed       -> [webhook] transfer bounced -> needs retry/support
 """
+import uuid
 from app.models.database import get_db, fetchone
 from app.utils.security import generate_release_code, hash_release_code, verify_release_code
 from app.services.sms_service import (
     notify_escrow_locked, notify_release_code,
     notify_payment_released, notify_logistics
 )
+from app.services import payment_service
 from config.settings import config
 
 
-def lock_escrow(buyer_phone: str, farmer_phone: str,
-                crop: str, quantity_bags: int, amount: float) -> dict:
+def _ref(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12].upper()}"
+
+
+# ── PHASE 1: BUYER PAYMENT COLLECTION ────────────────────────────────────
+
+def initiate_escrow_payment(buyer_phone: str, farmer_phone: str,
+                             crop: str, quantity_bags: int, amount: float) -> dict:
     """
-    Lock funds in escrow.
-    Returns { "ok": True, "txn_id": ..., "release_code": ... }
-    or      { "ok": False, "error": ... }
+    Buyer confirmed an order. We do NOT lock escrow yet — we generate a
+    real one-time account for them to pay into first. Escrow only
+    becomes real once Paystack confirms the money actually arrived
+    (see confirm_payment_received, called from the webhook).
     """
-    fee = round(amount * config.SERVICE_FEE_PERCENT / 100, 2)
-    release_code = generate_release_code()
-    code_hash = hash_release_code(release_code)
+    reference = _ref("PAY")
+    # USSD has no email field — Paystack just needs a unique identifier here.
+    pseudo_email = f"{buyer_phone.lstrip('+')}@sowtrust.ussd"
+
+    charge = payment_service.initiate_bank_transfer_charge(pseudo_email, amount, reference)
+    if not charge["ok"]:
+        return {"ok": False, "error": charge["error"]}
 
     try:
         with get_db() as conn:
-            # Ensure buyer row exists
             conn.execute(
                 "INSERT OR IGNORE INTO buyers (phone) VALUES (?)", (buyer_phone,)
             )
-            # Create escrow record
             conn.execute(
                 """INSERT INTO escrow_ledger
-                   (farmer_phone, buyer_phone, crop, quantity_bags, amount, service_fee, release_code_hash)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (farmer_phone, buyer_phone, crop, quantity_bags, amount, fee, code_hash),
+                   (farmer_phone, buyer_phone, crop, quantity_bags, amount, service_fee,
+                    release_code_hash, status, payment_reference,
+                    virtual_account_number, virtual_account_bank)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING_PAYMENT', ?, ?, ?)""",
+                (farmer_phone, buyer_phone, crop, quantity_bags, amount,
+                 round(amount * config.SERVICE_FEE_PERCENT / 100, 2),
+                 "",  # release code generated only once payment is confirmed
+                 reference, charge["account_number"], charge["bank_name"]),
             )
             row = conn.execute(
-                "SELECT txn_id FROM escrow_ledger WHERE release_code_hash = ?",
-                (code_hash,),
+                "SELECT txn_id FROM escrow_ledger WHERE payment_reference = ?", (reference,)
             ).fetchone()
             txn_id = row["txn_id"]
-
-            # Audit
             conn.execute(
                 "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
-                (buyer_phone, "ESCROW_LOCKED", f"TXN:{txn_id} AMT:{amount}"),
+                (buyer_phone, "PAYMENT_INITIATED", f"TXN:{txn_id} REF:{reference} AMT:{amount}"),
             )
 
-        # Notify both parties
-        notify_escrow_locked(farmer_phone, buyer_phone, crop, amount, txn_id)
-        notify_release_code(buyer_phone, release_code, txn_id)
-
-        return {"ok": True, "txn_id": txn_id, "release_code": release_code}
-
+        return {
+            "ok": True, "txn_id": txn_id,
+            "account_number": charge["account_number"],
+            "bank_name": charge["bank_name"],
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
+def confirm_payment_received(payment_reference: str, amount_paid: float) -> dict:
+    """
+    [Called from Paystack webhook ONLY — this is the real money-received event.]
+    Transitions PENDING_PAYMENT -> ESCROW_LOCKED and generates the release
+    code only now, since only now is there actually money to release.
+    """
+    row = fetchone(
+        "SELECT * FROM escrow_ledger WHERE payment_reference = ?", (payment_reference,)
+    )
+    if not row:
+        return {"ok": False, "error": "Unknown payment reference"}
+    if row["status"] != "PENDING_PAYMENT":
+        return {"ok": True, "note": f"Already {row['status']}, ignoring duplicate webhook"}
+
+    if amount_paid < row["amount"] - 1:  # tolerate rounding, not underpayment
+        # Underpaid — do not lock escrow. Flag for manual review rather than
+        # silently accepting a short payment.
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE escrow_ledger SET status='DISPUTED' WHERE txn_id=?", (row["txn_id"],)
+            )
+        return {"ok": False, "error": f"Underpaid: expected {row['amount']}, got {amount_paid}"}
+
+    release_code = generate_release_code()
+    code_hash = hash_release_code(release_code)
+
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE escrow_ledger
+               SET status='ESCROW_LOCKED', release_code_hash=?, payment_confirmed_at=datetime('now')
+               WHERE txn_id=?""",
+            (code_hash, row["txn_id"]),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
+            (row["buyer_phone"], "ESCROW_LOCKED", f"TXN:{row['txn_id']} AMT:{amount_paid}"),
+        )
+
+    notify_escrow_locked(row["farmer_phone"], row["buyer_phone"], row["crop"], amount_paid, row["txn_id"])
+    notify_release_code(row["buyer_phone"], release_code, row["txn_id"])
+    return {"ok": True, "txn_id": row["txn_id"]}
+
+
+# ── PHASE 2: FARMER SETTLEMENT ───────────────────────────────────────────
+
 def release_escrow(farmer_phone: str, txn_id: str, release_code: str) -> dict:
     """
-    Farmer enters release code → funds move to farmer wallet.
+    Farmer enters release code (given to them by the buyer on delivery).
+    This now fires a REAL Paystack transfer — requires the farmer to have
+    a verified payout account first (see payment_service.resolve_account_number,
+    wired into the "Add Bank Account" USSD step).
     """
     row = fetchone(
         "SELECT * FROM escrow_ledger WHERE txn_id = ? AND farmer_phone = ?",
@@ -72,32 +138,93 @@ def release_escrow(farmer_phone: str, txn_id: str, release_code: str) -> dict:
     if not verify_release_code(release_code, row["release_code_hash"]):
         return {"ok": False, "error": "Invalid release code."}
 
-    net_payout = row["amount"] - row["service_fee"]
+    farmer = fetchone("SELECT * FROM farmers WHERE phone = ?", (farmer_phone,))
+    if not farmer["bank_account_number"] or not farmer["bank_verified_at"]:
+        return {
+            "ok": False,
+            "error": "No verified payout account on file. Dial *709# > 4 > 3 to add your bank/wallet account first."
+        }
 
-    try:
+    net_payout = row["amount"] - row["service_fee"]
+    payout_ref = _ref("PAYOUT")
+
+    recipient = payment_service.create_transfer_recipient(
+        farmer["bank_account_name"], farmer["bank_account_number"], farmer["bank_code"]
+    )
+    if not recipient["ok"]:
+        return {"ok": False, "error": f"Could not set up payout: {recipient['error']}"}
+
+    transfer = payment_service.initiate_transfer(
+        recipient["recipient_code"], net_payout, payout_ref,
+        f"Sowtrust escrow payout — {row['crop']} — TXN:{txn_id}"
+    )
+    if not transfer["ok"]:
         with get_db() as conn:
             conn.execute(
-                "UPDATE escrow_ledger SET status='DELIVERED', released_at=datetime('now') WHERE txn_id=?",
-                (txn_id,),
+                "UPDATE escrow_ledger SET payout_status='failed' WHERE txn_id=?", (txn_id,)
             )
-            conn.execute(
-                "UPDATE farmers SET balance = balance + ?, credit_score = credit_score + 1 WHERE phone = ?",
-                (net_payout, farmer_phone),
-            )
-            conn.execute(
-                "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
-                (farmer_phone, "ESCROW_RELEASED", f"TXN:{txn_id} NET:{net_payout}"),
-            )
+        return {"ok": False, "error": f"Transfer failed: {transfer['error']}"}
 
-        notify_payment_released(farmer_phone, net_payout, txn_id)
-        return {"ok": True, "net_payout": net_payout}
+    # IMPORTANT: Paystack's transfer webhooks report back THEIR transfer_code,
+    # not the `reference` we supplied — store transfer_code as the lookup key
+    # or confirm_payout_success/mark_payout_failed will never match the webhook.
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE escrow_ledger
+               SET status='DELIVERED', payout_reference=?, payout_status='pending',
+                   released_at=datetime('now')
+               WHERE txn_id=?""",
+            (transfer["transfer_code"], txn_id),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
+            (farmer_phone, "PAYOUT_INITIATED", f"TXN:{txn_id} REF:{payout_ref} NET:{net_payout}"),
+        )
 
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    return {"ok": True, "net_payout": net_payout, "status": "processing"}
+
+
+def confirm_payout_success(transfer_code: str) -> dict:
+    """[Called from Paystack webhook] Transfer actually landed."""
+    row = fetchone("SELECT * FROM escrow_ledger WHERE payout_reference = ?", (transfer_code,))
+    if not row:
+        return {"ok": False, "error": "Unknown transfer reference"}
+
+    net_payout = row["amount"] - row["service_fee"]
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE escrow_ledger SET payout_status='success' WHERE txn_id=?", (row["txn_id"],)
+        )
+        conn.execute(
+            "UPDATE farmers SET credit_score = credit_score + 1 WHERE phone = ?",
+            (row["farmer_phone"],),
+        )
+    notify_payment_released(row["farmer_phone"], net_payout, row["txn_id"])
+    return {"ok": True}
+
+
+def mark_payout_failed(transfer_code: str, reason: str) -> dict:
+    """[Called from Paystack webhook] Transfer bounced — money never left Paystack, safe to retry."""
+    row = fetchone("SELECT * FROM escrow_ledger WHERE payout_reference = ?", (transfer_code,))
+    if not row:
+        return {"ok": False, "error": "Unknown transfer reference"}
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE escrow_ledger SET status='PAYOUT_FAILED', payout_status='failed' WHERE txn_id=?",
+            (row["txn_id"],),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
+            ("system", "PAYOUT_FAILED", f"TXN:{row['txn_id']} REASON:{reason}"),
+        )
+    from app.services.sms_service import send_sms
+    send_sms(row["farmer_phone"],
+              f"Sowtrust: Your payout for TXN {row['txn_id']} failed and will be retried. "
+              f"If this persists, dial *709# > 6 to reach an agent.")
+    return {"ok": True}
 
 
 def get_active_escrow(farmer_phone: str):
-    """Return the latest locked escrow for a farmer."""
     return fetchone(
         """SELECT * FROM escrow_ledger
            WHERE farmer_phone = ? AND status = 'ESCROW_LOCKED'
@@ -112,3 +239,79 @@ def get_farmer_history(farmer_phone: str):
         "SELECT * FROM escrow_ledger WHERE farmer_phone = ? ORDER BY locked_at DESC LIMIT 10",
         (farmer_phone,),
     )
+
+
+# ── EXPIRY / CLEANUP JOB ──────────────────────────────────────────────────
+# Meant to be run periodically (e.g. every 15 min) by an external
+# scheduler — see scripts/run_expiry_job.py. Deliberately NOT run
+# in-process on the web server, since gunicorn runs multiple worker
+# processes and each would spawn its own duplicate scheduler.
+
+def expire_stale_escrows() -> dict:
+    """
+    Two categories of stale transaction, handled differently:
+
+    1. PENDING_PAYMENT past its window (buyer never completed the bank
+       transfer) — nothing to refund, since no money ever arrived.
+       Just cancel it.
+    2. ESCROW_LOCKED past its 72-hour window (farmer never delivered /
+       release code never used) — buyer's real money IS sitting in
+       escrow, so it must be refunded, not just abandoned.
+    """
+    from app.models.database import fetchall
+    results = {"cancelled": 0, "refunded": 0, "refund_failed": 0}
+
+    # 1. Unpaid, abandoned payment attempts
+    stale_pending = fetchall(
+        """SELECT txn_id, buyer_phone FROM escrow_ledger
+           WHERE status = 'PENDING_PAYMENT'
+             AND locked_at < datetime('now', ?)""",
+        (f"-{config.PAYMENT_PENDING_TIMEOUT_MINUTES} minutes",),
+    )
+    for row in stale_pending:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE escrow_ledger SET status='CANCELLED' WHERE txn_id=?",
+                (row["txn_id"],)
+            )
+        results["cancelled"] += 1
+
+    # 2. Paid, locked, but never delivered/released in time — refund the buyer
+    stale_locked = fetchall(
+        """SELECT * FROM escrow_ledger
+           WHERE status = 'ESCROW_LOCKED' AND expires_at < datetime('now')"""
+    )
+    for row in stale_locked:
+        refund = payment_service.initiate_refund(row["payment_reference"], row["amount"])
+        if refund["ok"]:
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE escrow_ledger SET status='EXPIRED' WHERE txn_id=?",
+                    (row["txn_id"],)
+                )
+                conn.execute(
+                    "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
+                    ("system", "ESCROW_EXPIRED_REFUNDED",
+                     f"TXN:{row['txn_id']} AMT:{row['amount']}"),
+                )
+            from app.services.sms_service import send_sms
+            send_sms(row["buyer_phone"],
+                     f"Sowtrust: Your order (TXN {row['txn_id']}) expired after 72 hours "
+                     f"without delivery confirmation. NGN {row['amount']:,.0f} has been refunded.")
+            send_sms(row["farmer_phone"],
+                     f"Sowtrust: Your reserved sale (TXN {row['txn_id']}) expired after 72 "
+                     f"hours — the release code was never used, so the order was cancelled "
+                     f"and the buyer refunded. Dial *709# to relist.")
+            results["refunded"] += 1
+        else:
+            # Don't silently drop this — flag it, an agent/admin needs to
+            # look at it manually rather than money staying in limbo unresolved.
+            with get_db() as conn:
+                conn.execute(
+                    "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
+                    ("system", "REFUND_FAILED",
+                     f"TXN:{row['txn_id']} ERROR:{refund['error']}"),
+                )
+            results["refund_failed"] += 1
+
+    return results

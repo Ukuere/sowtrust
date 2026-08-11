@@ -1,5 +1,5 @@
 """
-AgriHub — Database connection manager.
+Sowtrust — Database connection manager.
 Uses a per-request connection pattern safe for Flask + Gunicorn.
 """
 import sqlite3

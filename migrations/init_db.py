@@ -1,5 +1,5 @@
 """
-AgriHub Global — Database Initialisation
+Sowtrust Global — Database Initialisation
 Run once:  python migrations/init_db.py
 """
 import sqlite3
@@ -27,8 +27,21 @@ CREATE TABLE IF NOT EXISTS farmers (
     credit_score  INTEGER DEFAULT 0,
     kyc_status    TEXT    DEFAULT 'PENDING',   -- PENDING | VERIFIED | SUSPENDED
     is_active     INTEGER DEFAULT 1,
+    bank_code           TEXT,               -- Paystack bank code, e.g. "50515" for Moniepoint MFB
+    bank_account_number TEXT,               -- 10-digit NUBAN (can be a digital wallet: OPay/Kuda/PalmPay etc.)
+    bank_account_name   TEXT,               -- name returned by Paystack account resolution — must match farmer name
+    bank_verified_at    TEXT,               -- set only after successful resolve_account_number match
     created_at    TEXT    DEFAULT (datetime('now'))
 );
+
+-- ─── PRODUCTS (dynamic catalog — farmers list any crop by name) ────────────
+CREATE TABLE IF NOT EXISTS products (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL,
+    name_lower  TEXT    NOT NULL UNIQUE,
+    created_at  TEXT    DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_products_name_lower ON products(name_lower);
 
 -- ─── AGENTS ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS agents (
@@ -64,9 +77,18 @@ CREATE TABLE IF NOT EXISTS escrow_ledger (
     amount            REAL    NOT NULL,
     service_fee       REAL    NOT NULL,
     release_code_hash TEXT    NOT NULL,
-    status            TEXT    NOT NULL DEFAULT 'ESCROW_LOCKED',
-                                -- ESCROW_LOCKED | DELIVERED | DISPUTED | EXPIRED | CANCELLED
+    status            TEXT    NOT NULL DEFAULT 'PENDING_PAYMENT',
+                                -- PENDING_PAYMENT | ESCROW_LOCKED | DELIVERED |
+                                -- DISPUTED | EXPIRED | CANCELLED | PAYOUT_FAILED
     logistics_id      TEXT,
+    -- Buyer → Sowtrust collection (Paystack "Charge" via bank transfer)
+    payment_reference     TEXT    UNIQUE,   -- Paystack transaction reference for buyer's payment
+    virtual_account_number TEXT,            -- one-time NUBAN buyer transfers to
+    virtual_account_bank   TEXT,            -- e.g. "Wema Bank"
+    payment_confirmed_at   TEXT,
+    -- Sowtrust → Farmer payout (Paystack "Transfer")
+    payout_reference       TEXT    UNIQUE,  -- Paystack transfer_code
+    payout_status           TEXT,           -- pending | success | failed | reversed
     locked_at         TEXT    DEFAULT (datetime('now')),
     released_at       TEXT,
     expires_at        TEXT    DEFAULT (datetime('now', '+72 hours'))
@@ -120,10 +142,10 @@ CREATE INDEX IF NOT EXISTS idx_requests_status  ON buyer_requests(status);
 
 def init_db():
     db_path = config.DATABASE_PATH
-    print(f"[AgriHub] Initialising database at: {db_path}")
+    print(f"[Sowtrust] Initialising database at: {db_path}")
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA)
-    print("[AgriHub] ✅ Database schema created successfully.")
+    print("[Sowtrust] ✅ Database schema created successfully.")
 
 
 if __name__ == "__main__":

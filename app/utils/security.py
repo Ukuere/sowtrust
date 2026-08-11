@@ -1,5 +1,5 @@
 """
-AgriHub — Security utilities.
+Sowtrust — Security utilities.
 """
 import hashlib
 import random

@@ -1,5 +1,5 @@
 """
-AgriHub Global — Application Entry Point
+Sowtrust Global — Application Entry Point
 Development: python run.py
 Production:  gunicorn -w 4 -b 0.0.0.0:5000 "run:app"
 """

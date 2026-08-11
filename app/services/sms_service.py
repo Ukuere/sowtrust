@@ -1,5 +1,5 @@
 """
-AgriHub — SMS notification service (Africa's Talking).
+Sowtrust — SMS notification service (Africa's Talking).
 """
 import africastalking
 from config.settings import config
@@ -24,28 +24,31 @@ def send_sms(phone: str, message: str) -> bool:
 def notify_escrow_locked(farmer_phone: str, buyer_phone: str,
                          crop: str, amount: float, txn_id: str):
     msg = (
-        f"AgriHub: Payment LOCKED!\n"
+        f"Sowtrust: Payment RECEIVED & LOCKED!\n"
         f"Crop: {crop}\nAmount: NGN {amount:,.0f}\n"
         f"TXN: {txn_id}\n"
-        f"Deliver goods & collect release code from buyer."
+        f"Deliver the goods, then collect the\n"
+        f"release code from the buyer to get paid."
     )
     send_sms(farmer_phone, msg)
     send_sms(buyer_phone,
-             f"AgriHub: Your escrow of NGN {amount:,.0f} for {crop} is locked. TXN: {txn_id}")
+             f"Sowtrust: Your payment of NGN {amount:,.0f} for {crop} was received. "
+             f"Escrow locked. TXN: {txn_id}")
 
 
 def notify_release_code(buyer_phone: str, release_code: str, txn_id: str):
     send_sms(buyer_phone,
-             f"AgriHub Release Code: {release_code}\nTXN: {txn_id}\n"
+             f"Sowtrust Release Code: {release_code}\nTXN: {txn_id}\n"
              f"Give this code to farmer ONLY after goods are received.")
 
 
 def notify_payment_released(farmer_phone: str, amount: float, txn_id: str):
     send_sms(farmer_phone,
-             f"AgriHub: NGN {amount:,.0f} credited to your wallet!\nTXN: {txn_id}\nDial *709# to withdraw.")
+             f"Sowtrust: NGN {amount:,.0f} has been paid to your "
+             f"bank/wallet account!\nTXN: {txn_id}")
 
 
 def notify_logistics(courier_phone: str, origin: str, destination: str,
                      crop: str, txn_id: str):
     send_sms(courier_phone,
-             f"AgriHub Logistics: Pickup {crop} from {origin}. Deliver to {destination}. TXN: {txn_id}")
+             f"Sowtrust Logistics: Pickup {crop} from {origin}. Deliver to {destination}. TXN: {txn_id}")

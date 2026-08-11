@@ -1,5 +1,5 @@
 """
-AgriHub Global — USSD Route Handler v6.1
+Sowtrust Global — USSD Route Handler v6.1
 =========================================
 KEY FIX (v6.1):
   Buyer portal no longer asks for a farmer phone number.
@@ -14,20 +14,26 @@ KEY FIX (v6.1):
 All portals: Farmer, Buyer, Logistics, Wallet, Withdraw, Agent.
 """
 from flask import Blueprint, request
+import uuid
 from app.models.database import get_db, fetchone, fetchall
 from app.utils.security import (
     hash_pin, verify_pin,
     get_session, set_session, clear_session
 )
 from app.services.escrow_service import (
-    lock_escrow, release_escrow,
+    initiate_escrow_payment, release_escrow,
     get_active_escrow, get_farmer_history
 )
+from app.services.payment_service import (
+    resolve_account_number, create_transfer_recipient, initiate_transfer
+)
 from app.services.sms_service import send_sms, notify_logistics
+from app.services.product_service import (
+    get_or_create_product, list_active_products, find_farmers_for_product
+)
 from config.settings import config
 
 ussd_bp = Blueprint("ussd", __name__)
-CROPS = config.CROPS
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -36,9 +42,6 @@ def _farmer(phone):
 
 def _agent(phone):
     return fetchone("SELECT * FROM agents WHERE phone=? AND is_active=1", (phone,))
-
-def _crop_menu():
-    return "\n".join(f"{k}. {v}" for k, v in CROPS.items())
 
 def CON(msg): return f"CON {msg}"
 def END(msg): return f"END {msg}"
@@ -56,7 +59,7 @@ def ussd_handler():
     if level == 0 or text == "":
         clear_session(phone)
         return CON(
-            "AgriHub Global\n"
+            "Sowtrust Global\n"
             "1. Farmer Portal\n"
             "2. Buyer Portal\n"
             "3. Logistics\n"
@@ -85,23 +88,31 @@ def ussd_handler():
         # 1.1 Registration
         if sub == "1":
             if level == 2: return CON("Enter Full Name:")
-            if level == 3: return CON(f"Select Crop:\n{_crop_menu()}")
+            if level == 3: return CON(
+                "What do you grow or sell?\n"
+                "Type the name, e.g. Maize, Tomatoes,\n"
+                "Plantain, Ginger — anything."
+            )
             if level == 4: return CON("Enter Your Location (LGA/Town):")
             if level == 5: return CON("Set 4-digit PIN:")
             if level == 6: return CON("Confirm PIN:")
             if level == 7:
-                name     = steps[2]
-                crop_key = steps[3]
-                loc      = steps[4]
-                pin      = steps[5]
-                pin2     = steps[6]
+                name      = steps[2]
+                crop_raw  = steps[3]
+                loc       = steps[4]
+                pin       = steps[5]
+                pin2      = steps[6]
                 if pin != pin2:
                     return END("PINs do not match. Dial *709# to retry.")
                 if len(pin) != 4 or not pin.isdigit():
                     return END("PIN must be exactly 4 digits.")
-                crop = CROPS.get(crop_key)
+                crop = get_or_create_product(crop_raw)
                 if not crop:
-                    return END("Invalid crop selection.")
+                    return END(
+                        "That doesn't look like a valid product name.\n"
+                        "Use letters only, 2-40 characters.\n"
+                        "Dial *709# to retry."
+                    )
                 if _farmer(phone):
                     return END("Account already exists. Dial *709# to use it.")
                 try:
@@ -115,7 +126,7 @@ def ussd_handler():
                             (phone, "FARMER_REGISTERED", f"Crop:{crop}")
                         )
                     send_sms(phone,
-                        f"Welcome to AgriHub, {name.title()}!\n"
+                        f"Welcome to Sowtrust, {name.title()}!\n"
                         f"Account active. Dial *709# > 1 > 2\n"
                         f"to set your price so buyers can find you.")
                     return END(
@@ -178,9 +189,11 @@ def ussd_handler():
                 result = release_escrow(phone, active["txn_id"], release_code)
                 if result["ok"]:
                     return END(
-                        f"Payment Released!\n"
-                        f"NGN {result['net_payout']:,.0f} added to wallet.\n"
-                        f"Dial *709# > 5 to withdraw."
+                        f"Release confirmed!\n"
+                        f"NGN {result['net_payout']:,.0f} is being sent to your\n"
+                        f"registered bank/wallet account now.\n"
+                        f"You'll get an SMS once it lands (usually\n"
+                        f"within minutes)."
                     )
                 return END(f"Release Failed: {result['error']}")
 
@@ -243,40 +256,52 @@ def ussd_handler():
         # ──────────────────────────────────────────────────────────────────
         if sub == "1":
 
-            # Step 2 — buyer selects which crop they want to buy
+            # Step 2 — show currently-listed products (most sellers first),
+            # AND accept free-text product names in the same input —
+            # covers both "browse what's popular" and "search for X".
             if level == 2:
-                return CON(f"Select Crop to Buy:\n{_crop_menu()}")
+                products = list_active_products(limit=8)
+                product_map = {str(i + 1): p["name"] for i, p in enumerate(products)}
+                set_session(phone, {"products": product_map})
 
-            # Step 3 — system fetches verified farmers and shows numbered list
-            if level == 3:
-                crop = CROPS.get(steps[2])
-                if not crop:
-                    return END("Invalid crop. Dial *709# to try again.")
-
-                rows = fetchall(
-                    """SELECT name, location, price, phone
-                       FROM   farmers
-                       WHERE  crop = ?
-                         AND  price > 0
-                         AND  kyc_status = 'VERIFIED'
-                         AND  is_active  = 1
-                       ORDER  BY price ASC
-                       LIMIT  5""",
-                    (crop,)
+                if products:
+                    lines = [f"{i+1}. {p['name']} ({p['seller_count']} sellers)"
+                             for i, p in enumerate(products)]
+                    return CON(
+                        "What do you want to buy?\n"
+                        + "\n".join(lines)
+                        + "\n\nPick a number, or type a\nproduct name to search:"
+                    )
+                return CON(
+                    "No listings yet. Type the name of\n"
+                    "what you're looking for, e.g. Maize:"
                 )
 
+            # Step 3 — resolve their answer (menu number OR typed name)
+            # to a product, then show verified sellers for it.
+            if level == 3:
+                sess = get_session(phone)
+                product_map = sess.get("products", {})
+                answer = steps[2].strip()
+
+                crop = product_map.get(answer)          # picked a number
+                if not crop:
+                    crop = answer                        # typed a name instead
+
+                rows, matched_crop = find_farmers_for_product(crop, limit=5)
                 if not rows:
                     return END(
-                        f"No verified farmers listing {crop} now.\n"
-                        f"Dial *709# > 2 > 2 to post a request.\n"
-                        f"An agent will match you within 24hrs."
+                        f"No verified sellers for '{crop}' right now.\n"
+                        f"Dial *709# > 2 > 2 to post a request —\n"
+                        f"an agent will match you within 24hrs."
                     )
+                crop = matched_crop
 
                 # Store farmer list in session keyed by menu number.
                 # This is how we retrieve the farmer's phone later
                 # without the buyer ever seeing or typing it.
                 farmer_map = {
-                    str(i + 1): dict(r) for i, r in enumerate(rows)
+                    str(i + 1): r for i, r in enumerate(rows)
                 }
                 set_session(phone, {"crop": crop, "farmers": farmer_map})
 
@@ -349,7 +374,7 @@ def ussd_handler():
                     f"2. Cancel"
                 )
 
-            # Step 6 — confirmed; lock the escrow
+            # Step 6 — confirmed; initiate REAL payment (not an instant lock)
             if level == 6:
                 sess = get_session(phone)
                 if not sess or "chosen" not in sess:
@@ -360,7 +385,7 @@ def ussd_handler():
                     return END("Cancelled. Dial *709# whenever you are ready.")
 
                 chosen = sess["chosen"]
-                result = lock_escrow(
+                result = initiate_escrow_payment(
                     buyer_phone   = phone,
                     farmer_phone  = chosen["phone"],
                     crop          = sess["crop"],
@@ -371,15 +396,15 @@ def ussd_handler():
 
                 if result["ok"]:
                     return END(
-                        f"Escrow Locked!\n"
+                        f"Almost done! Transfer NGN {sess['total']:,.0f} to:\n"
+                        f"Acct: {result['account_number']}\n"
+                        f"Bank: {result['bank_name']}\n\n"
                         f"TXN: {result['txn_id']}\n"
-                        f"Farmer {chosen['name']} notified by SMS.\n\n"
-                        f"Your release code sent to your phone.\n"
-                        f"Give it to farmer ONLY after delivery.\n"
-                        f"Do NOT share before goods arrive."
+                        f"Your produce is reserved once payment lands.\n"
+                        f"You'll get an SMS confirming escrow is locked."
                     )
                 return END(
-                    f"Transaction failed: {result['error']}\n"
+                    f"Could not start payment: {result['error']}\n"
                     f"Dial *709# to try again."
                 )
 
@@ -389,17 +414,20 @@ def ussd_handler():
         #      Agent will manually match and notify buyer by SMS.
         # ──────────────────────────────────────────────────────────────────
         elif sub == "2":
-            if level == 2: return CON(f"Select Crop Needed:\n{_crop_menu()}")
+            if level == 2: return CON("What crop/product do you need?\nType the name, e.g. Maize:")
             if level == 3: return CON("Enter Quantity (bags):")
             if level == 4: return CON("Enter Max Price per Bag (NGN):")
             if level == 5: return CON("Enter Your Delivery Location:")
             if level == 6:
-                crop      = CROPS.get(steps[2])
+                crop      = get_or_create_product(steps[2])
                 qty       = steps[3]
                 max_price = steps[4]
                 location  = steps[5]
                 if not crop:
-                    return END("Invalid crop selection.")
+                    return END(
+                        "That doesn't look like a valid product name.\n"
+                        "Use letters only, 2-40 characters."
+                    )
                 with get_db() as conn:
                     conn.execute(
                         "INSERT INTO buyer_requests "
@@ -504,7 +532,7 @@ def ussd_handler():
     # ══════════════════════════════════════════════════════════════════════
     elif choice == "4":
         if level == 1:
-            return CON("Wallet & PIN\n1. Check Balance\n2. Change PIN")
+            return CON("Wallet & PIN\n1. Check Balance\n2. Change PIN\n3. Add/Update Bank Account")
 
         sub = steps[1]
 
@@ -514,10 +542,16 @@ def ussd_handler():
                 farmer = _farmer(phone)
                 if not farmer or not verify_pin(steps[2], farmer["pin_hash"]):
                     return END("Invalid PIN or account not found.")
+                payout_line = (
+                    f"Payout Account: {farmer['bank_account_name']}"
+                    if farmer["bank_verified_at"] else
+                    "Payout Account: NOT SET (dial *709#>4>3)"
+                )
                 return END(
                     f"Balance:      NGN {farmer['balance']:,.0f}\n"
                     f"Credit Score: {farmer['credit_score']}\n"
-                    f"KYC Status:   {farmer['kyc_status']}"
+                    f"KYC Status:   {farmer['kyc_status']}\n"
+                    f"{payout_line}"
                 )
 
         elif sub == "2":
@@ -539,11 +573,75 @@ def ussd_handler():
                         "UPDATE farmers SET pin_hash=? WHERE phone=?",
                         (hash_pin(new_pin), phone)
                     )
-                send_sms(phone, "AgriHub: Your PIN was changed successfully.")
+                send_sms(phone, "Sowtrust: Your PIN was changed successfully.")
                 return END("PIN changed successfully.")
 
+        # 4.3 Add/Update Bank or Wallet Account — required before any real payout
+        elif sub == "3":
+            bank_lines = "\n".join(f"{k}. {v['name']}" for k, v in config.BANKS.items())
+            if level == 2: return CON(f"Select Bank/Wallet:\n{bank_lines}")
+            if level == 3: return CON("Enter Account Number (10 digits):")
+            if level == 4: return CON("Enter PIN to confirm:")
+            if level == 5:
+                bank_choice = steps[2]
+                acct_number = steps[3].strip()
+                pin = steps[4]
+
+                farmer = _farmer(phone)
+                if not farmer or not verify_pin(pin, farmer["pin_hash"]):
+                    return END("Invalid PIN.")
+                bank = config.BANKS.get(bank_choice)
+                if not bank:
+                    return END("Invalid bank selection. Dial *709# to retry.")
+                if len(acct_number) != 10 or not acct_number.isdigit():
+                    return END("Account number must be exactly 10 digits.")
+
+                result = resolve_account_number(acct_number, bank["code"])
+                if not result["ok"]:
+                    return END(
+                        f"Could not verify that account: {result['error']}\n"
+                        f"Check the number and try again."
+                    )
+
+                set_session(phone, {
+                    "pending_bank": bank["name"], "pending_bank_code": bank["code"],
+                    "pending_acct": acct_number, "pending_name": result["account_name"],
+                })
+                return CON(
+                    f"Account Name: {result['account_name']}\n"
+                    f"Bank: {bank['name']}\n\n"
+                    f"Is this YOU? (Do not confirm someone\n"
+                    f"else's account)\n"
+                    f"1. Yes, save this account\n"
+                    f"2. No, cancel"
+                )
+            if level == 6:
+                sess = get_session(phone)
+                if not sess or "pending_acct" not in sess:
+                    return END("Session expired. Dial *709# to start again.")
+                if steps[5] != "1":
+                    clear_session(phone)
+                    return END("Cancelled. No account was saved.")
+                with get_db() as conn:
+                    conn.execute(
+                        """UPDATE farmers
+                           SET bank_code=?, bank_account_number=?, bank_account_name=?,
+                               bank_verified_at=datetime('now')
+                           WHERE phone=?""",
+                        (sess["pending_bank_code"], sess["pending_acct"],
+                         sess["pending_name"], phone),
+                    )
+                clear_session(phone)
+                send_sms(phone, f"Sowtrust: Payout account saved — {sess['pending_bank']} "
+                                 f"({sess['pending_name']}). You can now receive real payouts.")
+                return END(
+                    f"Saved! Payments will now go to:\n"
+                    f"{sess['pending_name']}\n{sess['pending_bank']}"
+                )
+
     # ══════════════════════════════════════════════════════════════════════
-    #  PORTAL 5 — WITHDRAW
+    #  PORTAL 5 — WITHDRAW  (legacy/manual balance only — e.g. bonus credits.
+    #  Normal sales settle automatically at escrow release, see Portal 1.3)
     # ══════════════════════════════════════════════════════════════════════
     elif choice == "5":
         if level == 1: return CON("Enter Amount to Withdraw (NGN):")
@@ -561,6 +659,27 @@ def ussd_handler():
                     f"Insufficient balance.\n"
                     f"Available: NGN {farmer['balance']:,.0f}"
                 )
+            if not farmer["bank_account_number"] or not farmer["bank_verified_at"]:
+                return END(
+                    "No verified payout account on file.\n"
+                    "Dial *709# > 4 > 3 to add your bank/wallet\n"
+                    "account first, then try withdrawing again."
+                )
+
+            recipient = create_transfer_recipient(
+                farmer["bank_account_name"], farmer["bank_account_number"], farmer["bank_code"]
+            )
+            if not recipient["ok"]:
+                return END(f"Could not process withdrawal: {recipient['error']}")
+
+            payout_ref = f"WD-{uuid.uuid4().hex[:12].upper()}"
+            transfer = initiate_transfer(
+                recipient["recipient_code"], amount, payout_ref,
+                f"Sowtrust wallet withdrawal — {phone}"
+            )
+            if not transfer["ok"]:
+                return END(f"Withdrawal failed: {transfer['error']}")
+
             with get_db() as conn:
                 conn.execute(
                     "UPDATE farmers SET balance = balance - ? WHERE phone=?",
@@ -568,15 +687,16 @@ def ussd_handler():
                 )
                 conn.execute(
                     "INSERT INTO audit_log(actor,action,details) VALUES(?,?,?)",
-                    (phone, "WITHDRAWAL", f"AMT:{amount}")
+                    (phone, "WITHDRAWAL_INITIATED", f"AMT:{amount} REF:{payout_ref}")
                 )
             send_sms(
                 phone,
-                f"AgriHub: Withdrawal of NGN {amount:,.0f} is processing.\n"
-                f"Funds arrive within 24 hours."
+                f"Sowtrust: Withdrawal of NGN {amount:,.0f} to "
+                f"{farmer['bank_account_name']} is processing."
             )
             return END(
-                f"Withdrawal of NGN {amount:,.0f} initiated.\n"
+                f"Withdrawal of NGN {amount:,.0f} initiated to\n"
+                f"{farmer['bank_account_name']}.\n"
                 f"SMS confirmation coming shortly."
             )
 
@@ -654,7 +774,7 @@ def ussd_handler():
                     )
                 send_sms(
                     farmer_phone,
-                    f"AgriHub: {farmer['name']}, your account is VERIFIED!\n"
+                    f"Sowtrust: {farmer['name']}, your account is VERIFIED!\n"
                     f"Set your price: *709# > 1 > 2\n"
                     f"Buyers can now find and purchase from you."
                 )

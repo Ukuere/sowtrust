@@ -1,5 +1,5 @@
 """
-AgriHub — Demo Data Seeder
+Sowtrust — Demo Data Seeder
 Run: python scripts/seed_demo_data.py
 Populates the DB with realistic sample data for dashboard testing.
 """
