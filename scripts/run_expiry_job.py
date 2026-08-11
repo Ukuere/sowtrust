@@ -16,11 +16,14 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services.escrow_service import expire_stale_escrows
+from app.utils.security import purge_expired_sessions
 
 if __name__ == "__main__":
     results = expire_stale_escrows()
+    purged = purge_expired_sessions()
     print(f"[Sowtrust Expiry Job] cancelled={results['cancelled']} "
-          f"refunded={results['refunded']} refund_failed={results['refund_failed']}")
+          f"refunded={results['refunded']} refund_failed={results['refund_failed']} "
+          f"sessions_purged={purged}")
     if results["refund_failed"] > 0:
         print("⚠️  One or more refunds FAILED — check audit_log table "
               "(action='REFUND_FAILED') and follow up manually.")

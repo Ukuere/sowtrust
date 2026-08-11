@@ -188,6 +188,14 @@ CREATE TABLE IF NOT EXISTS logistics_log (
     created_at          TEXT    DEFAULT (datetime('now'))
 );
 
+-- ─── USSD SESSIONS (must be shared across gunicorn workers) ────────────────
+CREATE TABLE IF NOT EXISTS ussd_sessions (
+    phone        TEXT PRIMARY KEY,
+    data         TEXT NOT NULL,
+    last_active  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON ussd_sessions(last_active);
+
 -- ─── AUDIT LOG ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS audit_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

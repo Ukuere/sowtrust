@@ -17,7 +17,7 @@ from flask import Blueprint, request
 import uuid
 from app.models.database import get_db, fetchone, fetchall
 from app.utils.security import (
-    hash_pin, verify_pin,
+    hash_pin, verify_pin, verify_and_upgrade_pin,
     get_session, set_session, clear_session
 )
 from app.services.escrow_service import (
@@ -148,7 +148,7 @@ def ussd_handler():
             if level == 2: return CON("Enter your 4-digit PIN:")
             if level == 3:
                 farmer = _farmer(phone)
-                if not farmer or not verify_pin(steps[2], farmer["pin_hash"]):
+                if not farmer or not verify_and_upgrade_pin("farmers", phone, steps[2], farmer["pin_hash"]):
                     return END("Invalid PIN or account not found.")
                 return CON(
                     f"Crop: {farmer['crop']}\n"
@@ -174,7 +174,7 @@ def ussd_handler():
             if level == 2: return CON("Enter your PIN:")
             if level == 3:
                 farmer = _farmer(phone)
-                if not farmer or not verify_pin(steps[2], farmer["pin_hash"]):
+                if not farmer or not verify_and_upgrade_pin("farmers", phone, steps[2], farmer["pin_hash"]):
                     return END("Invalid PIN.")
                 active = get_active_escrow(phone)
                 if not active:
@@ -207,7 +207,7 @@ def ussd_handler():
             if level == 2: return CON("Enter your PIN:")
             if level == 3:
                 farmer = _farmer(phone)
-                if not farmer or not verify_pin(steps[2], farmer["pin_hash"]):
+                if not farmer or not verify_and_upgrade_pin("farmers", phone, steps[2], farmer["pin_hash"]):
                     return END("Invalid PIN.")
                 history = get_farmer_history(phone)
                 if not history:
@@ -565,7 +565,7 @@ def ussd_handler():
             if level == 4: return CON("Enter your PIN:")
             if level == 5:
                 provider = get_provider(phone)
-                if not provider or not verify_pin(steps[4], provider["pin_hash"]):
+                if not provider or not verify_and_upgrade_pin("logistics_providers", phone, steps[4], provider["pin_hash"]):
                     return END("Invalid PIN or provider account not found.")
                 result = confirm_delivery(phone, steps[2].upper(), steps[3].strip().upper())
                 if not result["ok"]:
@@ -585,7 +585,7 @@ def ussd_handler():
             if level == 4: return CON("Enter PIN to confirm:")
             if level == 5:
                 provider = get_provider(phone)
-                if not provider or not verify_pin(steps[4], provider["pin_hash"]):
+                if not provider or not verify_and_upgrade_pin("logistics_providers", phone, steps[4], provider["pin_hash"]):
                     return END("Invalid PIN or provider account not found.")
                 bank = config.BANKS.get(steps[2])
                 if not bank:
@@ -631,7 +631,7 @@ def ussd_handler():
             if level == 2: return CON("Enter PIN:")
             if level == 3:
                 farmer = _farmer(phone)
-                if not farmer or not verify_pin(steps[2], farmer["pin_hash"]):
+                if not farmer or not verify_and_upgrade_pin("farmers", phone, steps[2], farmer["pin_hash"]):
                     return END("Invalid PIN or account not found.")
                 payout_line = (
                     f"Payout Account: {farmer['bank_account_name']}"
@@ -651,7 +651,7 @@ def ussd_handler():
             if level == 4: return CON("Confirm New PIN:")
             if level == 5:
                 farmer = _farmer(phone)
-                if not farmer or not verify_pin(steps[2], farmer["pin_hash"]):
+                if not farmer or not verify_and_upgrade_pin("farmers", phone, steps[2], farmer["pin_hash"]):
                     return END("Invalid current PIN.")
                 new_pin = steps[3]
                 confirm = steps[4]
@@ -679,7 +679,7 @@ def ussd_handler():
                 pin = steps[4]
 
                 farmer = _farmer(phone)
-                if not farmer or not verify_pin(pin, farmer["pin_hash"]):
+                if not farmer or not verify_and_upgrade_pin("farmers", phone, pin, farmer["pin_hash"]):
                     return END("Invalid PIN.")
                 bank = config.BANKS.get(bank_choice)
                 if not bank:
@@ -743,7 +743,7 @@ def ussd_handler():
                 return END("Invalid amount. Enter numbers only.")
             amount = float(amount_str)
             farmer = _farmer(phone)
-            if not farmer or not verify_pin(steps[2], farmer["pin_hash"]):
+            if not farmer or not verify_and_upgrade_pin("farmers", phone, steps[2], farmer["pin_hash"]):
                 return END("Invalid PIN or account not found.")
             if farmer["balance"] < amount:
                 return END(
@@ -838,7 +838,7 @@ def ussd_handler():
             if level == 2: return CON("Enter Agent PIN:")
             if level == 3:
                 agent = _agent(phone)
-                if not agent or not verify_pin(steps[2], agent["pin_hash"]):
+                if not agent or not verify_and_upgrade_pin("agents", phone, steps[2], agent["pin_hash"]):
                     return END("Invalid Agent PIN.")
                 return CON("Enter Farmer Phone Number to Verify:")
             if level == 4:
@@ -879,7 +879,7 @@ def ussd_handler():
             if level == 2: return CON("Enter Agent PIN:")
             if level == 3:
                 agent = _agent(phone)
-                if not agent or not verify_pin(steps[2], agent["pin_hash"]):
+                if not agent or not verify_and_upgrade_pin("agents", phone, steps[2], agent["pin_hash"]):
                     return END("Invalid PIN.")
                 return END(
                     f"Agent: {agent['name']}\n"
@@ -894,7 +894,7 @@ def ussd_handler():
             if level == 2: return CON("Enter Agent PIN:")
             if level == 3:
                 agent = _agent(phone)
-                if not agent or not verify_pin(steps[2], agent["pin_hash"]):
+                if not agent or not verify_and_upgrade_pin("agents", phone, steps[2], agent["pin_hash"]):
                     return END("Invalid Agent PIN.")
                 return CON("Enter Provider Phone Number to Verify:")
             if level == 4:
