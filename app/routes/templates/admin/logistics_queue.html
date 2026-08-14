@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Logistics KYC Review — Sowtrust Admin</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #f7f5f0; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; }
+  .card { background: #fff; border: 1px solid #e2ddd2; border-radius: 8px; padding: 18px; margin-bottom: 14px; max-width: 720px; }
+  .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
+  .muted { color: #6b6a63; font-size: 13px; }
+  form.inline { display: inline-block; margin-right: 8px; }
+  button { padding: 8px 14px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  button.approve { background: #1c6b3c; color: #fff; }
+  button.reject { background: #a4342a; color: #fff; }
+  input[type=text], input[type=number], input[type=datetime-local], select {
+    padding: 6px; border: 1px solid #e2ddd2; border-radius: 4px; font-size: 13px; width: 220px;
+  }
+  .quote-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 12px; }
+  .quote-form label { display:block; font-size:12px; color:#6b6a63; margin-bottom:3px; }
+  .flash { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 14px; max-width: 720px; }
+  .flash.success { background: #e3f3e8; color: #1c6b3c; }
+  .flash.error { background: #fbe8e6; color: #a4342a; }
+</style>
+</head>
+<body>
+<h1>Logistics provider KYC review queue</h1>
+<p class="muted">Type your name as the Basic Auth username so it's recorded against each decision.</p>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="flash {{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+<h2>Logistics quote requests</h2>
+{% if quote_requests %}
+  {% for q in quote_requests %}
+    <div class="card">
+      <div class="row"><strong>Order {{ q.order_id }}</strong><span class="muted">{{ q.created_at }}</span></div>
+      <div class="row"><span>Product</span><span>{{ q.product_name }} x {{ q.quantity }}</span></div>
+      <div class="row"><span>Farmer</span><span>{{ q.farmer_name }} - {{ q.farmer_location }}</span></div>
+      <div class="row"><span>Buyer</span><span>{{ q.buyer_name or q.buyer_phone }}</span></div>
+      <div class="row"><span>Current buyer subtotal</span><span>&#8358;{{ "{:,.2f}".format(q.buyer_total or 0) }}</span></div>
+
+      <form method="post" action="{{ url_for('admin_logistics.lock_quote', txn_id=q.order_id) }}">
+        <div class="quote-form">
+          <div>
+            <label>Pickup</label>
+            <input type="text" name="pickup_location" value="{{ q.pickup_location }}" required>
+          </div>
+          <div>
+            <label>Delivery</label>
+            <input type="text" name="delivery_location" value="{{ q.delivery_location }}" required>
+          </div>
+          <div>
+            <label>Verified provider</label>
+            <select name="logistics_provider_id" required>
+              <option value="">Select provider</option>
+              {% for p in providers %}
+                <option value="{{ p.id }}" {% if q.logistics_provider_id == p.id %}selected{% endif %}>
+                  {{ p.name }}{% if p.business_name %} - {{ p.business_name }}{% endif %}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>Quoted amount (NGN)</label>
+            <input type="number" min="1" step="0.01" name="quoted_amount" value="{{ q.quoted_amount or '' }}" required>
+          </div>
+          <div>
+            <label>Expires at</label>
+            <input type="datetime-local" name="expires_at">
+          </div>
+        </div>
+        <button type="submit" class="approve">Lock quote</button>
+      </form>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No logistics quote requests pending.</p>
+{% endif %}
+
+<h2>Logistics provider KYC review queue</h2>
+{% if pending %}
+  {% for v in pending %}
+    <div class="card">
+      <div class="row"><strong>{{ v.name }}</strong><span class="muted">submitted {{ v.submitted_at }}</span></div>
+      {% if v.business_name %}<div class="row"><span>Business</span><span>{{ v.business_name }}</span></div>{% endif %}
+      <div class="row"><span>Operating area</span><span>{{ v.operating_area }}</span></div>
+      <div class="row"><span>Vehicle</span><span>{{ v.vehicle_type }} — {{ v.vehicle_registration }}</span></div>
+      <div class="row"><span>ID</span><span>{{ v.id_type }} — {{ v.id_number }}</span></div>
+      <div class="row"><span>ID document</span><span>{{ v.id_document_path }}</span></div>
+      {% if v.drivers_license_number %}
+        <div class="row"><span>Driver's licence</span><span>{{ v.drivers_license_number }}</span></div>
+      {% endif %}
+      <div class="row"><span>Vehicle reg. document</span><span>{{ v.vehicle_registration_document_path }}</span></div>
+
+      <form class="inline" method="post" action="{{ url_for('admin_logistics.decide', verification_id=v.id) }}">
+        <input type="hidden" name="decision" value="VERIFIED">
+        <button type="submit" class="approve">Approve</button>
+      </form>
+      <form class="inline" method="post" action="{{ url_for('admin_logistics.decide', verification_id=v.id) }}"
+            onsubmit="return this.rejection_reason.value.trim().length > 0 || alert('Enter a rejection reason.');">
+        <input type="hidden" name="decision" value="REJECTED">
+        <input type="text" name="rejection_reason" placeholder="Rejection reason">
+        <button type="submit" class="reject">Reject</button>
+      </form>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No logistics provider verifications pending review.</p>
+{% endif %}
+</body>
+</html>

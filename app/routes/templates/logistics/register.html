@@ -1,0 +1,31 @@
+{% extends "logistics/base.html" %}
+{% block title %}Register — Sowtrust Logistics{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Register as a delivery provider</h1>
+  <form method="post">
+    <label>Full name</label>
+    <input type="text" name="name" value="{{ form.get('name','') }}" required>
+
+    <label>Business name (optional)</label>
+    <input type="text" name="business_name" value="{{ form.get('business_name','') }}">
+
+    <label>Phone number</label>
+    <input type="tel" name="phone" placeholder="08011112222" value="{{ form.get('phone','') }}" required>
+
+    <label>Operating area</label>
+    <input type="text" name="operating_area" placeholder="e.g. Lagos, Ikorodu" value="{{ form.get('operating_area','') }}" required>
+
+    <label>Vehicle type</label>
+    <input type="text" name="vehicle_type" placeholder="e.g. Van, Truck, Motorcycle" value="{{ form.get('vehicle_type','') }}" required>
+
+    <label>Choose a 4-digit PIN</label>
+    <input type="password" name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required>
+
+    <button type="submit">Create account</button>
+  </form>
+  <p class="muted" style="margin-top:14px;">
+    Already registered? <a class="plain" href="{{ url_for('logistics_web.login') }}">Log in</a>
+  </p>
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "logistics/base.html" %}
+{% block title %}Confirm delivery — Sowtrust Logistics{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Confirm delivery — TXN {{ txn_id }}</h1>
+  <p class="muted">Ask the buyer for the delivery code they received by SMS. Only enter it once the goods have actually been handed over.</p>
+  <form method="post">
+    <label>Delivery code</label>
+    <input type="text" name="delivery_code" style="text-transform:uppercase;" maxlength="6" required>
+    <button type="submit">Confirm delivery</button>
+  </form>
+</div>
+{% endblock %}

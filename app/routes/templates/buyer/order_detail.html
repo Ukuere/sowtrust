@@ -1,0 +1,70 @@
+{% extends "buyer/base.html" %}
+{% block title %}Order {{ order.txn_id }} — Sowtrust{% endblock %}
+{% block content %}
+<p><a class="plain" href="{{ url_for('buyer_web.orders') }}">&larr; All orders</a></p>
+<h1>Order {{ order.txn_id }}</h1>
+
+<div class="card">
+  <span class="status {{ order.status }}">{{ order.status.replace('_',' ') }}</span>
+  <h2 style="margin-top:12px;">{{ order.crop }} &times; {{ order.quantity_bags }} bag{{ 's' if order.quantity_bags != 1 else '' }}</h2>
+
+  <div class="row"><span>Product</span><span>&#8358;{{ "{:,.2f}".format(order.product_amount or order.amount) }}</span></div>
+  <div class="row"><span>Sowtrust service fee</span><span>&#8358;{{ "{:,.2f}".format(order.buyer_platform_fee or 0) }}</span></div>
+  {% if quote and quote.quoted_amount %}
+    <div class="row"><span>Logistics</span><span>&#8358;{{ "{:,.2f}".format(quote.quoted_amount) }}</span></div>
+  {% endif %}
+  <div class="row total"><span>Total</span><span>&#8358;{{ "{:,.2f}".format(order.buyer_total or order.amount) }}</span></div>
+
+  {% if order.delivery_address %}
+    <div class="row" style="border-top:1px solid var(--border); margin-top:10px; padding-top:10px; display:block;">
+      <span class="muted">Deliver to</span><br>
+      {{ order.buyer_name }}<br>
+      {{ order.delivery_address }}, {{ order.delivery_city }}, {{ order.delivery_state }}
+    </div>
+  {% endif %}
+
+  {% if order.status == 'QUOTE_PENDING' %}
+    <p class="muted" style="margin-top:14px;">
+      SowTrust Operations is reviewing pickup, destination, quantity, and available verified logistics providers.
+      Payment will open after a delivery quote is locked.
+    </p>
+  {% elif order.status == 'QUOTE_READY' and quote %}
+    <div class="card" style="background:#eef8f0; border-color:#cde5d2; margin-top:16px;">
+      <p style="margin:0 0 6px;"><strong>Logistics quote ready</strong></p>
+      <p style="margin:0;">
+        Delivery: &#8358;{{ "{:,.2f}".format(quote.quoted_amount or 0) }}<br>
+        Final checkout total: &#8358;{{ "{:,.2f}".format(order.buyer_total or order.amount) }}
+      </p>
+      <p class="muted" style="margin-top:8px;">
+        Accepting this quote locks the checkout amount and generates your Paystack transfer account.
+      </p>
+      <form method="post" action="{{ url_for('buyer_web.accept_quote', txn_id=order.txn_id) }}">
+        <button type="submit">Accept quote and pay</button>
+      </form>
+    </div>
+  {% elif order.status == 'BUYER_ACCEPTED_QUOTE' %}
+    <p class="muted" style="margin-top:14px;">Quote accepted. Preparing your payment instructions.</p>
+  {% elif order.status == 'PENDING_PAYMENT' %}
+    <div class="card" style="background:#fff9ec; border-color:#f0dfa6; margin-top:16px;">
+      <p style="margin:0 0 6px;"><strong>Transfer the exact amount above to:</strong></p>
+      <p style="margin:0; font-size:18px;">{{ order.virtual_account_number }} &middot; {{ order.virtual_account_bank }}</p>
+      <p class="muted" style="margin-top:8px;">
+        This page updates automatically once we confirm your transfer —
+        no need to refresh.
+      </p>
+    </div>
+  {% elif order.status == 'ESCROW_LOCKED' %}
+    <p class="muted" style="margin-top:14px;">
+      Payment confirmed and held in escrow. The release code has been sent
+      to your phone by SMS — give it to the farmer only after you've
+      received your order.
+    </p>
+  {% elif order.status == 'DELIVERED' %}
+    <p class="muted" style="margin-top:14px;">Delivered — funds released to the farmer.</p>
+  {% elif order.status in ['EXPIRED', 'CANCELLED'] %}
+    <p class="muted" style="margin-top:14px;">
+      This order was {{ order.status.lower() }}{% if order.status == 'EXPIRED' %} and refunded{% endif %}.
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

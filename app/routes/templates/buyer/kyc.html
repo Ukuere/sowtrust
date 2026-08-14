@@ -1,0 +1,51 @@
+{% extends "buyer/base.html" %}
+{% block title %}Verify your account — Sowtrust{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Verify your account</h1>
+
+  {% if buyer.kyc_status == 'KYC_PENDING' %}
+    <p class="muted">Your verification is submitted and awaiting review. We'll notify you once it's approved.</p>
+  {% elif buyer.kyc_status == 'REJECTED' %}
+    <div class="flash error">
+      Your last submission was rejected{% if buyer.kyc_rejection_reason %}: {{ buyer.kyc_rejection_reason }}{% endif %}.
+      Please correct the issue and resubmit below.
+    </div>
+  {% endif %}
+
+  {% if buyer.kyc_status not in ['KYC_PENDING'] %}
+  <form method="post" enctype="multipart/form-data">
+    <label>ID type</label>
+    <select name="id_type" required>
+      <option value="" disabled selected>Select one</option>
+      {% for t in id_types %}
+        <option value="{{ t }}">{{ t }}</option>
+      {% endfor %}
+    </select>
+
+    <label>ID number</label>
+    <input type="text" name="id_number" required>
+
+    <label>Upload ID document (PDF, JPG, or PNG — max 5MB)</label>
+    <input type="file" name="id_document" accept=".pdf,.jpg,.jpeg,.png" required>
+
+    {% if is_business %}
+      <h2 style="margin-top:20px;">Business verification</h2>
+      <label>CAC registration number</label>
+      <input type="text" name="business_reg_number" required>
+
+      <label>Upload CAC registration document</label>
+      <input type="file" name="business_reg_document" accept=".pdf,.jpg,.jpeg,.png" required>
+
+      <label>Authorized representative's name</label>
+      <input type="text" name="authorized_rep_name" required>
+
+      <label>Authorized representative's ID number</label>
+      <input type="text" name="authorized_rep_id_number">
+    {% endif %}
+
+    <button type="submit">Submit for review</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

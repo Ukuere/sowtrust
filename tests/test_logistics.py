@@ -24,6 +24,8 @@ def client(tmp_path):
     m3()
     from migrations.add_logistics_providers import migrate as m4
     m4()
+    from migrations.add_logistics_quotes import migrate as m5
+    m5()
 
     from app import create_app
     app = create_app()
@@ -66,13 +68,13 @@ def _setup_order(client, status="ESCROW_LOCKED"):
            (farmer_phone, buyer_phone, crop, quantity_bags, amount, service_fee,
             product_amount, buyer_platform_fee, seller_platform_fee,
             farmer_settlement_amount, buyer_total, sowtrust_total_revenue,
-            release_code_hash, status, payment_reference)
+            release_code_hash, status)
            VALUES (?, ?, 'Maize', 2, 50000, 1250,
                    50000, 1250, 1250, 48750, 51250, 2500,
-                   'x', ?, 'PAY-LOGTEST')""",
+                   'x', ?)""",
         (FARMER_PHONE, BUYER_PHONE, status)
     )
-    return fetchone("SELECT * FROM escrow_ledger WHERE payment_reference='PAY-LOGTEST'")
+    return fetchone("SELECT * FROM escrow_ledger WHERE buyer_phone=? ORDER BY id DESC LIMIT 1", (BUYER_PHONE,))
 
 
 # ── Registration & verification ───────────────────────────────────────────
@@ -102,7 +104,7 @@ def test_quote_updates_buyer_total_and_keeps_ledger_balanced(client):
     settlement, NOT added on top for the buyer."""
     from app.services.logistics_service import record_quote
     from app.models.database import fetchone
-    order = _setup_order(client, status="PENDING_PAYMENT")
+    order = _setup_order(client, status="QUOTE_PENDING")
 
     result = record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     assert result["ok"] is True
@@ -128,7 +130,7 @@ def test_quote_rejected_after_buyer_already_charged(client):
     order = _setup_order(client, status="ESCROW_LOCKED")
     result = record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     assert result["ok"] is False
-    assert "already been charged" in result["error"]
+    assert "payment has already been initialized" in result["error"]
 
 
 # ── Assignment ────────────────────────────────────────────────────────────
@@ -137,7 +139,7 @@ def test_unverified_provider_cannot_take_job(client):
     from app.services.logistics_service import record_quote, assign_provider
     from app.models.database import execute
     _setup_provider(client, verified=False)
-    order = _setup_order(client, status="PENDING_PAYMENT")
+    order = _setup_order(client, status="QUOTE_PENDING")
     record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     execute("UPDATE escrow_ledger SET status='ESCROW_LOCKED' WHERE txn_id=?", (order["txn_id"],))
 
@@ -151,7 +153,7 @@ def test_provider_without_bank_account_cannot_take_job(client):
     from app.services.logistics_service import record_quote, assign_provider
     from app.models.database import execute
     _setup_provider(client, verified=True, with_bank=False)
-    order = _setup_order(client, status="PENDING_PAYMENT")
+    order = _setup_order(client, status="QUOTE_PENDING")
     record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     execute("UPDATE escrow_ledger SET status='ESCROW_LOCKED' WHERE txn_id=?", (order["txn_id"],))
 
@@ -164,7 +166,7 @@ def test_job_cannot_be_double_assigned(client):
     from app.services.logistics_service import record_quote, assign_provider
     from app.models.database import execute
     _setup_provider(client)
-    order = _setup_order(client, status="PENDING_PAYMENT")
+    order = _setup_order(client, status="QUOTE_PENDING")
     record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     execute("UPDATE escrow_ledger SET status='ESCROW_LOCKED' WHERE txn_id=?", (order["txn_id"],))
 
@@ -205,7 +207,7 @@ def test_full_logistics_settlement_flow(client):
     from app.services.logistics_service import record_quote, confirm_delivery
     from app.models.database import execute, fetchone
     _setup_provider(client)
-    order = _setup_order(client, status="PENDING_PAYMENT")
+    order = _setup_order(client, status="QUOTE_PENDING")
     record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     execute("UPDATE escrow_ledger SET status='ESCROW_LOCKED' WHERE txn_id=?", (order["txn_id"],))
 
@@ -234,7 +236,7 @@ def test_wrong_delivery_code_rejected_and_logged(client):
     from app.services.logistics_service import record_quote, confirm_delivery
     from app.models.database import execute, fetchone
     _setup_provider(client)
-    order = _setup_order(client, status="PENDING_PAYMENT")
+    order = _setup_order(client, status="QUOTE_PENDING")
     record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     execute("UPDATE escrow_ledger SET status='ESCROW_LOCKED' WHERE txn_id=?", (order["txn_id"],))
     _assign_and_capture_code(client, order)
@@ -254,7 +256,7 @@ def test_delivery_code_cannot_be_reused(client):
     from app.services.logistics_service import record_quote, confirm_delivery
     from app.models.database import execute
     _setup_provider(client)
-    order = _setup_order(client, status="PENDING_PAYMENT")
+    order = _setup_order(client, status="QUOTE_PENDING")
     record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     execute("UPDATE escrow_ledger SET status='ESCROW_LOCKED' WHERE txn_id=?", (order["txn_id"],))
     code = _assign_and_capture_code(client, order)
@@ -278,7 +280,7 @@ def test_provider_cannot_confirm_someone_elses_job(client):
     from app.services.logistics_service import record_quote, confirm_delivery, register_provider
     from app.models.database import execute
     _setup_provider(client)
-    order = _setup_order(client, status="PENDING_PAYMENT")
+    order = _setup_order(client, status="QUOTE_PENDING")
     record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     execute("UPDATE escrow_ledger SET status='ESCROW_LOCKED' WHERE txn_id=?", (order["txn_id"],))
     code = _assign_and_capture_code(client, order)
@@ -299,7 +301,7 @@ def test_logistics_payout_webhook_confirms_and_increments_jobs(client):
     from config.settings import config
 
     _setup_provider(client)
-    order = _setup_order(client, status="PENDING_PAYMENT")
+    order = _setup_order(client, status="QUOTE_PENDING")
     record_quote(order["txn_id"], 15000, "Lagos", "Ibadan")
     execute("UPDATE escrow_ledger SET status='ESCROW_LOCKED' WHERE txn_id=?", (order["txn_id"],))
     code = _assign_and_capture_code(client, order)
@@ -330,3 +332,4 @@ def test_logistics_payout_webhook_confirms_and_increments_jobs(client):
 
     provider = fetchone("SELECT * FROM logistics_providers WHERE phone=?", (PROVIDER_PHONE,))
     assert provider["completed_jobs"] == 1
+

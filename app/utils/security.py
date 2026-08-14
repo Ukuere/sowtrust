@@ -36,6 +36,27 @@ def hash_pin(pin: str) -> str:
     return bcrypt.hashpw(pin.strip().encode(), bcrypt.gensalt()).decode()
 
 
+# ── WEB PASSWORDS (buyer web accounts) ──────────────────────────────────────
+# Same bcrypt primitive as PINs, just not .strip()'d/uppercased the way a
+# 4-digit USSD PIN is — a web password can contain leading/trailing-
+# significant characters a user actually typed. Kept as separate named
+# functions (not just an alias) so PIN and password call sites read clearly
+# and can diverge later (e.g. password complexity rules) without touching
+# PIN logic.
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(plain_password: str, stored_hash: str) -> bool:
+    if not stored_hash:
+        return False
+    try:
+        return bcrypt.checkpw(plain_password.encode(), stored_hash.encode())
+    except (ValueError, TypeError):
+        return False
+
+
 def _legacy_sha256(pin: str) -> str:
     return hashlib.sha256(pin.strip().encode()).hexdigest()
 

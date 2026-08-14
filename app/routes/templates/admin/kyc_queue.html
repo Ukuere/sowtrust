@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>KYC Review — Sowtrust Admin</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #f7f5f0; margin: 0; padding: 24px; }
+  h1 { font-size: 20px; }
+  .card { background: #fff; border: 1px solid #e2ddd2; border-radius: 8px; padding: 18px; margin-bottom: 14px; max-width: 720px; }
+  .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
+  .muted { color: #6b6a63; font-size: 13px; }
+  a { color: #124a29; }
+  form.inline { display: inline-block; margin-right: 8px; }
+  button { padding: 8px 14px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  button.approve { background: #1c6b3c; color: #fff; }
+  button.reject { background: #a4342a; color: #fff; }
+  input[type=text] { padding: 6px; border: 1px solid #e2ddd2; border-radius: 4px; font-size: 13px; width: 220px; }
+  .flash { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 14px; max-width: 720px; }
+  .flash.success { background: #e3f3e8; color: #1c6b3c; }
+  .flash.error { background: #fbe8e6; color: #a4342a; }
+</style>
+</head>
+<body>
+<h1>Buyer KYC review queue</h1>
+<p class="muted">Logged in as: type your name as the Basic Auth username so it's recorded against each decision.</p>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="flash {{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+{% if pending %}
+  {% for v in pending %}
+    <div class="card">
+      <div class="row"><strong>{{ v.name }}</strong><span class="muted">submitted {{ v.submitted_at }}</span></div>
+      {% if v.business_name %}<div class="row"><span>Business</span><span>{{ v.business_name }}</span></div>{% endif %}
+      <div class="row"><span>Buyer type</span><span>{{ v.buyer_type }}</span></div>
+      <div class="row"><span>Email</span><span>{{ v.email }}</span></div>
+      <div class="row"><span>ID</span><span>{{ v.id_type }} — {{ v.id_number }}</span></div>
+      <div class="row"><span>ID document</span><span><a href="#" title="{{ v.id_document_path }}">{{ v.id_document_path }}</a></span></div>
+      {% if v.business_reg_number %}
+        <div class="row"><span>CAC number</span><span>{{ v.business_reg_number }}</span></div>
+        <div class="row"><span>CAC document</span><span>{{ v.business_reg_document_path }}</span></div>
+        <div class="row"><span>Authorized rep</span><span>{{ v.authorized_rep_name }}</span></div>
+      {% endif %}
+
+      <form class="inline" method="post" action="{{ url_for('admin_kyc.decide', verification_id=v.id) }}">
+        <input type="hidden" name="decision" value="VERIFIED">
+        <button type="submit" class="approve">Approve</button>
+      </form>
+      <form class="inline" method="post" action="{{ url_for('admin_kyc.decide', verification_id=v.id) }}"
+            onsubmit="return this.rejection_reason.value.trim().length > 0 || alert('Enter a rejection reason.');">
+        <input type="hidden" name="decision" value="REJECTED">
+        <input type="text" name="rejection_reason" placeholder="Rejection reason">
+        <button type="submit" class="reject">Reject</button>
+      </form>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No buyer verifications pending review.</p>
+{% endif %}
+</body>
+</html>

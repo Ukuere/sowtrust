@@ -1,0 +1,24 @@
+{% extends "buyer/base.html" %}
+{% block title %}{{ crop }} — Sowtrust{% endblock %}
+{% block content %}
+<p><a class="plain" href="{{ url_for('buyer_web.browse') }}">&larr; Back to browse</a></p>
+<h1>{{ crop }}</h1>
+{% if farmers %}
+  {% for f in farmers %}
+    <div class="card">
+      <div class="row">
+        <div>
+          <h2 style="margin-bottom:2px;">{{ f.name }}</h2>
+          <span class="muted">{{ f.location }}</span>
+        </div>
+        <div style="text-align:right;">
+          <div><strong>&#8358;{{ "{:,.0f}".format(f.price) }}</strong> <span class="muted">/ bag</span></div>
+          <a class="btn" href="{{ url_for('buyer_web.checkout', farmer_phone=f.phone, crop=crop) }}">Order</a>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="card"><p class="muted">No verified sellers for "{{ crop }}" right now.</p></div>
+{% endif %}
+{% endblock %}

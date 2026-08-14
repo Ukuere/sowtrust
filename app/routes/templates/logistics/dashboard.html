@@ -1,0 +1,56 @@
+{% extends "logistics/base.html" %}
+{% block title %}Dashboard — Sowtrust Logistics{% endblock %}
+{% block content %}
+<h1>Welcome, {{ provider.name }}</h1>
+
+{% if provider.kyc_status != 'VERIFIED' %}
+  <div class="card">
+    <span class="status {{ provider.kyc_status }}">{{ provider.kyc_status.replace('_',' ') }}</span>
+    {% if provider.kyc_status == 'PENDING' %}
+      <p style="margin-top:10px;">Submit your ID and vehicle documents to start accepting delivery jobs.</p>
+      <a class="btn" href="{{ url_for('logistics_web.kyc') }}">Submit verification</a>
+    {% elif provider.kyc_status == 'UNDER_REVIEW' %}
+      <p style="margin-top:10px;">Your documents are under review. We'll notify you once approved.</p>
+    {% elif provider.kyc_status == 'REJECTED' %}
+      <p style="margin-top:10px;">
+        Your last submission was rejected{% if provider.kyc_rejection_reason %}: {{ provider.kyc_rejection_reason }}{% endif %}.
+      </p>
+      <a class="btn" href="{{ url_for('logistics_web.kyc') }}">Resubmit</a>
+    {% elif provider.kyc_status == 'SUSPENDED' %}
+      <p style="margin-top:10px;">Your account is suspended. Contact support for details.</p>
+    {% endif %}
+  </div>
+{% elif not provider.bank_verified_at %}
+  <div class="card">
+    <p>You're verified — one more step. Add your payout account to start accepting jobs.</p>
+    <a class="btn" href="{{ url_for('logistics_web.bank_account') }}">Add payout account</a>
+  </div>
+{% else %}
+  <div class="card">
+    <span class="status VERIFIED">VERIFIED</span>
+    <p class="muted" style="margin-top:8px;">Payout account: {{ provider.bank_account_name }}</p>
+  </div>
+
+  <h2 style="margin-top:20px;">Available jobs</h2>
+  {% if jobs %}
+    {% for j in jobs %}
+      <div class="card">
+        <div class="row">
+          <div>
+            <strong>{{ j.origin }} &rarr; {{ j.destination }}</strong><br>
+            <span class="muted">{{ j.crop }} &times; {{ j.quantity_bags }} bags &middot; TXN {{ j.txn_id }}</span>
+          </div>
+          <div style="text-align:right;">
+            <div><strong>&#8358;{{ "{:,.0f}".format(j.settlement_amount) }}</strong></div>
+            <form method="post" action="{{ url_for('logistics_web.accept_job', txn_id=j.txn_id) }}" style="margin:0;">
+              <button type="submit" style="margin-top:8px;">Accept</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <div class="card"><p class="muted">No jobs available right now — check back shortly.</p></div>
+  {% endif %}
+{% endif %}
+{% endblock %}

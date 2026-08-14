@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Sowtrust Logistics{% endblock %}</title>
+<style>
+  :root {
+    --blue: #1c4e6b; --blue-dark: #12324a; --bg: #f5f7f8;
+    --card: #ffffff; --border: #dbe2e6; --text: #2b2b28; --muted: #6b7178;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { background: var(--blue-dark); color: #fff; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; }
+  header a { color: #fff; text-decoration: none; font-weight: 600; }
+  header nav a { margin-left: 16px; font-weight: 400; opacity: .9; font-size: 14px; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 20px 60px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  h2 { font-size: 17px; margin: 0 0 8px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  input, select { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 15px; }
+  button, .btn { display: inline-block; background: var(--blue); color: #fff; border: none; padding: 11px 18px; border-radius: 6px; font-size: 15px; cursor: pointer; text-decoration: none; margin-top: 16px; }
+  button:hover, .btn:hover { background: var(--blue-dark); }
+  .flash { padding: 10px 14px; border-radius: 6px; margin-bottom: 14px; font-size: 14px; }
+  .flash.success { background: #dff0e8; color: #1c6b3c; }
+  .flash.error { background: #fbe8e6; color: #a4342a; }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+  .row.total { font-weight: 700; border-top: 1px solid var(--border); margin-top: 6px; padding-top: 10px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .status { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  .status.PENDING, .status.UNDER_REVIEW { background: #fff3cd; color: #8a6d00; }
+  .status.VERIFIED { background: #dff0e8; color: #1c6b3c; }
+  .status.REJECTED, .status.SUSPENDED { background: #fbe8e6; color: #a4342a; }
+  .status.QUOTED { background: #d9edf7; color: #26647a; }
+  .status.ASSIGNED { background: #e6e0f7; color: #4b2a8a; }
+  .status.DELIVERED { background: #dff0e8; color: #1c6b3c; }
+  a.plain { color: var(--blue-dark); }
+</style>
+</head>
+<body>
+<header>
+  <a href="{{ url_for('logistics_web.dashboard') }}">🚚 Sowtrust Logistics</a>
+  <nav>
+    {% if session.get('provider_phone') %}
+      <a href="{{ url_for('logistics_web.dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('logistics_web.jobs') }}">My Jobs</a>
+      <a href="{{ url_for('logistics_web.logout') }}">Log out</a>
+    {% else %}
+      <a href="{{ url_for('logistics_web.login') }}">Log in</a>
+    {% endif %}
+  </nav>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

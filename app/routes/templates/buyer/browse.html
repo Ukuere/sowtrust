@@ -1,0 +1,36 @@
+{% extends "buyer/base.html" %}
+{% block title %}Browse — Sowtrust{% endblock %}
+{% block content %}
+{% if buyer_kyc_status and buyer_kyc_status != 'VERIFIED' %}
+  <div class="flash {{ 'error' if buyer_kyc_status == 'REJECTED' else 'success' }}" style="display:flex; justify-content:space-between; align-items:center;">
+    <span>
+      {% if buyer_kyc_status == 'KYC_PENDING' %}
+        Your verification is under review — you can browse now, but you'll need to be verified before checking out.
+      {% elif buyer_kyc_status == 'REJECTED' %}
+        Your last verification attempt was rejected.
+      {% else %}
+        Verify your account to be able to check out.
+      {% endif %}
+    </span>
+    {% if buyer_kyc_status != 'KYC_PENDING' %}
+      <a class="btn" style="margin:0;" href="{{ url_for('buyer_web.kyc') }}">Verify now</a>
+    {% endif %}
+  </div>
+{% endif %}
+<h1>What are you buying today?</h1>
+{% if products %}
+  <div class="grid">
+    {% for p in products %}
+      <a class="card" style="text-decoration:none; color:inherit;"
+         href="{{ url_for('buyer_web.product_detail', crop=p.name) }}">
+        <h2>{{ p.name }}</h2>
+        <span class="muted">{{ p.seller_count }} seller{{ 's' if p.seller_count != 1 else '' }} available</span>
+      </a>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card">
+    <p class="muted">No verified listings right now — check back shortly.</p>
+  </div>
+{% endif %}
+{% endblock %}

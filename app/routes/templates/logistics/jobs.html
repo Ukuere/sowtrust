@@ -1,0 +1,32 @@
+{% extends "logistics/base.html" %}
+{% block title %}My Jobs — Sowtrust Logistics{% endblock %}
+{% block content %}
+<h1>My jobs</h1>
+{% if jobs %}
+  {% for j in jobs %}
+    <div class="card">
+      <div class="row">
+        <div>
+          <strong>{{ j.origin }} &rarr; {{ j.destination }}</strong><br>
+          <span class="muted">{{ j.crop }} &times; {{ j.quantity_bags }} bags &middot; TXN {{ j.txn_id }}</span>
+        </div>
+        <div style="text-align:right;">
+          <div><strong>&#8358;{{ "{:,.0f}".format(j.settlement_amount) }}</strong></div>
+          <span class="status {{ j.status }}">{{ j.status }}</span>
+        </div>
+      </div>
+      {% if j.status == 'ASSIGNED' %}
+        <a class="btn" href="{{ url_for('logistics_web.confirm_delivery', txn_id=j.txn_id) }}">Confirm delivery</a>
+      {% elif j.status == 'DELIVERED' %}
+        <p class="muted" style="margin-top:10px;">
+          Delivered{% if j.payout_status %} — payout {{ j.payout_status }}{% endif %}.
+        </p>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="card">
+    <p class="muted">No jobs yet. <a class="plain" href="{{ url_for('logistics_web.dashboard') }}">Check available jobs</a>.</p>
+  </div>
+{% endif %}
+{% endblock %}

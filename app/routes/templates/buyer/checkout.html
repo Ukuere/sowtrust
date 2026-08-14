@@ -1,0 +1,30 @@
+{% extends "buyer/base.html" %}
+{% block title %}Checkout - Sowtrust{% endblock %}
+{% block content %}
+<h1>Confirm your order</h1>
+<div class="card">
+  <h2>{{ farmer.crop }} - {{ farmer.name }}</h2>
+  <p class="muted">{{ farmer.location }} &middot; &#8358;{{ "{:,.0f}".format(farmer.price) }} / bag</p>
+
+  <form method="get" style="margin-bottom:0;">
+    <label>Quantity (bags)</label>
+    <input type="number" name="quantity" min="1" value="{{ quantity }}" onchange="this.form.submit()">
+  </form>
+</div>
+
+{% if preview %}
+<div class="card">
+  <h2>Price breakdown</h2>
+  <div class="row"><span>{{ farmer.crop }} &times; {{ quantity }} bag{{ 's' if quantity != 1 else '' }}</span><span>&#8358;{{ "{:,.2f}".format(preview.product_amount) }}</span></div>
+  <div class="row"><span>Sowtrust service fee</span><span>&#8358;{{ "{:,.2f}".format(preview.buyer_platform_fee) }}</span></div>
+  <div class="row total"><span>Subtotal before logistics</span><span>&#8358;{{ "{:,.2f}".format(preview.buyer_total) }}</span></div>
+  <p class="muted" style="margin-top:10px;">
+    SowTrust Operations will confirm delivery cost with a verified logistics provider before payment opens.
+  </p>
+  <form method="post">
+    <input type="hidden" name="quantity" value="{{ quantity }}">
+    <button type="submit">Request logistics quote</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

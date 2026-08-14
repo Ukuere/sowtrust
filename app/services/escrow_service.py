@@ -24,6 +24,135 @@ def _ref(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12].upper()}"
 
 
+def create_order_awaiting_quote(buyer_phone: str, farmer_phone: str,
+                                 crop: str, quantity_bags: int,
+                                 product_amount: float,
+                                 buyer_name: str = "",
+                                 delivery_address: str = "",
+                                 delivery_city: str = "",
+                                 delivery_state: str = "") -> dict:
+    """
+    Create the order shell before any Paystack call is made.
+
+    The MVP checkout flow is quote-before-payment: buyer confirms product,
+    quantity, and delivery address; operations locks a logistics quote;
+    the buyer accepts it; only then do we initiate payment.
+    """
+    if quantity_bags <= 0:
+        return {"ok": False, "error": "Quantity must be greater than zero."}
+    if product_amount <= 0:
+        return {"ok": False, "error": "Product amount must be greater than zero."}
+
+    fees = fee_service.calculate_full_order(product_amount, 0.0)
+
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO buyers (phone) VALUES (?)", (buyer_phone,)
+            )
+            conn.execute(
+                """INSERT INTO escrow_ledger
+                   (farmer_phone, buyer_phone, crop, quantity_bags,
+                    amount, service_fee,
+                    product_amount, buyer_platform_fee, seller_platform_fee,
+                    logistics_amount, logistics_platform_fee,
+                    buyer_total, farmer_settlement_amount,
+                    logistics_settlement_amount, sowtrust_total_revenue,
+                    release_code_hash, status,
+                    buyer_name, delivery_address, delivery_city, delivery_state)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, 0, ?, '',
+                           'QUOTE_PENDING', ?, ?, ?, ?)""",
+                (farmer_phone, buyer_phone, crop, quantity_bags,
+                 fees["product_amount"], fees["seller_platform_fee"],
+                 fees["product_amount"], fees["buyer_platform_fee"],
+                 fees["seller_platform_fee"], fees["buyer_total"],
+                 fees["farmer_settlement_amount"], fees["sowtrust_total_revenue"],
+                 buyer_name or None, delivery_address or None,
+                 delivery_city or None, delivery_state or None),
+            )
+            row = conn.execute(
+                """SELECT txn_id FROM escrow_ledger
+                   WHERE buyer_phone = ? AND farmer_phone = ?
+                   ORDER BY id DESC LIMIT 1""",
+                (buyer_phone, farmer_phone),
+            ).fetchone()
+            txn_id = row["txn_id"]
+            conn.execute(
+                "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
+                (buyer_phone, "LOGISTICS_QUOTE_REQUESTED",
+                 f"TXN:{txn_id} PRODUCT:{crop} QTY:{quantity_bags}"),
+            )
+        return {"ok": True, "txn_id": txn_id, **fees}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def initiate_payment_for_order(txn_id: str, buyer_phone: str) -> dict:
+    """
+    Initiate Paystack only after a buyer-accepted, locked logistics quote
+    exists. This updates the existing order so quote and payment share a
+    single audit trail.
+    """
+    row = fetchone(
+        """SELECT * FROM escrow_ledger
+           WHERE txn_id = ? AND buyer_phone = ?""",
+        (txn_id, buyer_phone),
+    )
+    if not row:
+        return {"ok": False, "error": "Order not found."}
+    if row["status"] == "PENDING_PAYMENT" and row["payment_reference"]:
+        return {
+            "ok": True,
+            "txn_id": row["txn_id"],
+            "buyer_total": row["buyer_total"],
+            "account_number": row["virtual_account_number"],
+            "bank_name": row["virtual_account_bank"],
+            "already_initialized": True,
+        }
+    if row["status"] != "BUYER_ACCEPTED_QUOTE":
+        return {"ok": False, "error": "Accept the logistics quote before payment."}
+
+    quote = fetchone(
+        """SELECT * FROM logistics_quotes
+           WHERE order_id = ? AND status = 'LOCKED'""",
+        (txn_id,),
+    )
+    if not quote or not quote["buyer_accepted_at"]:
+        return {"ok": False, "error": "A locked, buyer-accepted logistics quote is required before payment."}
+
+    reference = _ref("PAY")
+    pseudo_email = f"{buyer_phone.lstrip('+')}@sowtrust.com"
+    charge = payment_service.initiate_bank_transfer_charge(
+        pseudo_email, row["buyer_total"], reference
+    )
+    if not charge["ok"]:
+        return {"ok": False, "error": charge["error"]}
+
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE escrow_ledger
+               SET status='PENDING_PAYMENT',
+                   payment_reference=?,
+                   virtual_account_number=?,
+                   virtual_account_bank=?
+               WHERE txn_id=? AND status='BUYER_ACCEPTED_QUOTE'""",
+            (reference, charge["account_number"], charge["bank_name"], txn_id),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
+            (buyer_phone, "PAYMENT_INITIATED",
+             f"TXN:{txn_id} REF:{reference} BUYER_TOTAL:{row['buyer_total']}"),
+        )
+
+    return {
+        "ok": True,
+        "txn_id": txn_id,
+        "buyer_total": row["buyer_total"],
+        "account_number": charge["account_number"],
+        "bank_name": charge["bank_name"],
+    }
+
+
 # ── PHASE 1: BUYER PAYMENT COLLECTION ────────────────────────────────────
 
 def initiate_escrow_payment(buyer_phone: str, farmer_phone: str,
@@ -39,6 +168,12 @@ def initiate_escrow_payment(buyer_phone: str, farmer_phone: str,
     buyer_platform_fee (+ logistics_amount, once wired in) — NOT just
     the raw product_amount. See fee_service.calculate_full_order().
     """
+    if logistics_amount:
+        return {
+            "ok": False,
+            "error": "Logistics amount must come from a locked buyer-accepted quote before payment.",
+        }
+
     fees = fee_service.calculate_full_order(product_amount, logistics_amount)
     buyer_total = fees["buyer_total"]
 

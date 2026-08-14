@@ -25,6 +25,23 @@ def _ref(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12].upper()}"
 
 
+def _get_provider_by_phone_or_id(provider_ref):
+    if not provider_ref:
+        return None
+    provider = fetchone(
+        "SELECT * FROM logistics_providers WHERE phone = ? AND is_active = 1",
+        (str(provider_ref),),
+    )
+    if provider:
+        return provider
+    if str(provider_ref).isdigit():
+        return fetchone(
+            "SELECT * FROM logistics_providers WHERE id = ? AND is_active = 1",
+            (int(provider_ref),),
+        )
+    return None
+
+
 # ── PROVIDER ONBOARDING ───────────────────────────────────────────────────
 
 def register_provider(phone: str, name: str, operating_area: str,
@@ -55,6 +72,113 @@ def get_provider(phone: str):
     return fetchone(
         "SELECT * FROM logistics_providers WHERE phone = ? AND is_active = 1", (phone,)
     )
+
+
+def get_verified_providers() -> list:
+    rows = fetchall(
+        """SELECT * FROM logistics_providers
+           WHERE is_active = 1 AND kyc_status = 'VERIFIED'
+           ORDER BY name ASC"""
+    )
+    return [dict(r) for r in rows]
+
+
+# ── KYC DOCUMENT SUBMISSION (spec sections 5, 8) ─────────────────────────
+# assign_provider() below already enforces kyc_status == 'VERIFIED' — has
+# since the step 2 build. This section is what actually lets a provider
+# reach that status: submit documents, get reviewed, done. Mirrors
+# buyer_service.submit_kyc()/admin_review_kyc() and reuses the same
+# kyc_verifications audit table (user_type='logistics_provider').
+
+ID_TYPES = ["National ID (NIN)", "International Passport", "Driver's Licence", "Voter's Card"]
+
+
+def submit_provider_kyc(phone: str, id_type: str, id_number: str, id_document_path: str,
+                         drivers_license_number: str = "", drivers_license_path: str = "",
+                         vehicle_registration_document_path: str = "") -> dict:
+    provider = fetchone("SELECT * FROM logistics_providers WHERE phone = ?", (phone,))
+    if not provider:
+        return {"ok": False, "error": "Account not found."}
+    if provider["kyc_status"] == "UNDER_REVIEW":
+        return {"ok": False, "error": "Your verification is already under review."}
+    if provider["kyc_status"] == "VERIFIED":
+        return {"ok": False, "error": "Your account is already verified."}
+
+    if id_type not in ID_TYPES:
+        return {"ok": False, "error": "Select a valid ID type."}
+    if not id_number or len(id_number.strip()) < 4:
+        return {"ok": False, "error": "Enter a valid ID number."}
+    if not id_document_path:
+        return {"ok": False, "error": "Upload a copy of your ID document."}
+    if not vehicle_registration_document_path:
+        return {"ok": False, "error": "Upload your vehicle registration document."}
+
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE logistics_providers SET
+                 kyc_status = 'UNDER_REVIEW',
+                 id_type = ?, id_number = ?, id_document_path = ?,
+                 drivers_license_number = ?, drivers_license_path = ?,
+                 vehicle_registration_document_path = ?,
+                 kyc_submitted_at = datetime('now')
+               WHERE phone = ?""",
+            (id_type, id_number.strip(), id_document_path,
+             drivers_license_number.strip() or None, drivers_license_path or None,
+             vehicle_registration_document_path, phone),
+        )
+        conn.execute(
+            """INSERT INTO kyc_verifications
+               (user_type, user_id, verification_type, status, submitted_at)
+               VALUES ('logistics_provider', ?, 'identity_vehicle', 'PENDING', datetime('now'))""",
+            (phone,),
+        )
+    return {"ok": True}
+
+
+def get_pending_provider_kyc_verifications() -> list:
+    rows = fetchall(
+        """SELECT v.*, p.name, p.business_name, p.email, p.operating_area,
+                  p.vehicle_type, p.vehicle_registration,
+                  p.id_type, p.id_number, p.id_document_path,
+                  p.drivers_license_number, p.drivers_license_path,
+                  p.vehicle_registration_document_path
+           FROM kyc_verifications v
+           JOIN logistics_providers p ON p.phone = v.user_id
+           WHERE v.user_type = 'logistics_provider' AND v.status IN ('PENDING', 'UNDER_REVIEW')
+           ORDER BY v.submitted_at ASC"""
+    )
+    return [dict(r) for r in rows]
+
+
+def admin_review_provider_kyc(verification_id: int, decision: str, reviewed_by: str,
+                               rejection_reason: str = "") -> dict:
+    if decision not in ("VERIFIED", "REJECTED"):
+        return {"ok": False, "error": "Invalid decision."}
+    if decision == "REJECTED" and not rejection_reason.strip():
+        return {"ok": False, "error": "A rejection reason is required."}
+
+    record = fetchone("SELECT * FROM kyc_verifications WHERE id = ?", (verification_id,))
+    if not record:
+        return {"ok": False, "error": "Verification record not found."}
+    if record["status"] not in ("PENDING", "UNDER_REVIEW"):
+        return {"ok": False, "error": "This record has already been reviewed."}
+
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE kyc_verifications
+               SET status = ?, verified_at = datetime('now'),
+                   reviewed_by = ?, rejection_reason = ?
+               WHERE id = ?""",
+            (decision, reviewed_by, rejection_reason.strip() or None, verification_id),
+        )
+        conn.execute(
+            """UPDATE logistics_providers
+               SET kyc_status = ?, kyc_reviewed_at = datetime('now'),
+                   kyc_rejection_reason = ?
+               WHERE phone = ?""",
+            (decision, rejection_reason.strip() or None, record["user_id"]),
+        )
+    return {"ok": True}
 
 
 def save_provider_bank_account(phone: str, bank_code: str, account_number: str) -> dict:
@@ -130,6 +254,208 @@ def record_quote(txn_id: str, quote_amount: float, origin: str, destination: str
     return {"ok": True, **fees}
 
 
+def create_quote_request(txn_id: str, pickup_location: str,
+                         delivery_location: str, requested_by: str = "system") -> dict:
+    escrow = fetchone("SELECT * FROM escrow_ledger WHERE txn_id = ?", (txn_id,))
+    if not escrow:
+        return {"ok": False, "error": "Order not found."}
+    if escrow["status"] not in ("QUOTE_REQUIRED", "QUOTE_PENDING"):
+        return {"ok": False, "error": f"Cannot request a quote while order is {escrow['status']}."}
+    if not pickup_location or not delivery_location:
+        return {"ok": False, "error": "Pickup and delivery locations are required."}
+
+    existing = fetchone("SELECT * FROM logistics_quotes WHERE order_id = ?", (txn_id,))
+    if existing:
+        return {"ok": True, "quote_id": existing["id"], "already_exists": True}
+
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO logistics_quotes
+               (order_id, pickup_location, delivery_location,
+                product_name, quantity, status, quoted_by)
+               VALUES (?, ?, ?, ?, ?, 'PENDING', ?)""",
+            (txn_id, pickup_location, delivery_location,
+             escrow["crop"], escrow["quantity_bags"], requested_by),
+        )
+        conn.execute(
+            "UPDATE escrow_ledger SET status='QUOTE_PENDING' WHERE txn_id=?",
+            (txn_id,),
+        )
+    row = fetchone("SELECT * FROM logistics_quotes WHERE order_id = ?", (txn_id,))
+    return {"ok": True, "quote_id": row["id"]}
+
+
+def get_quote_for_order(txn_id: str):
+    row = fetchone("SELECT * FROM logistics_quotes WHERE order_id = ?", (txn_id,))
+    return dict(row) if row else None
+
+
+def get_pending_quote_requests(limit: int = 50) -> list:
+    rows = fetchall(
+        """SELECT q.*, e.buyer_phone, e.farmer_phone, e.buyer_name,
+                  e.delivery_address, e.delivery_city, e.delivery_state,
+                  e.product_amount, e.buyer_platform_fee, e.buyer_total,
+                  f.name AS farmer_name, f.location AS farmer_location
+           FROM logistics_quotes q
+           JOIN escrow_ledger e ON e.txn_id = q.order_id
+           JOIN farmers f ON f.phone = e.farmer_phone
+           WHERE q.status IN ('PENDING', 'QUOTED', 'SELECTED')
+             AND e.status IN ('QUOTE_PENDING', 'QUOTE_READY')
+           ORDER BY q.created_at ASC
+           LIMIT ?""",
+        (limit,),
+    )
+    return [dict(r) for r in rows]
+
+
+def record_quote(txn_id: str, quote_amount: float, origin: str, destination: str,
+                 logistics_provider_id=None, quoted_by: str = "operations",
+                 expires_at: str = None) -> dict:
+    """
+    Operations records/selects a verified-provider logistics quote before
+    buyer payment. This locks the quoted buyer price but does not call
+    Paystack; the buyer must explicitly accept first.
+    """
+    escrow = fetchone("SELECT * FROM escrow_ledger WHERE txn_id = ?", (txn_id,))
+    if not escrow:
+        return {"ok": False, "error": "Transaction not found."}
+    if escrow["status"] in ("PENDING_PAYMENT", "PAYMENT_INITIALIZED",
+                            "ESCROW_LOCKED", "FUNDS_HELD",
+                            "LOGISTICS_ASSIGNED", "PICKED_UP",
+                            "IN_TRANSIT", "DELIVERED_PENDING_CONFIRMATION",
+                            "CONFIRMED", "SETTLEMENT", "COMPLETED"):
+        return {"ok": False, "error":
+                f"Cannot add a quote once the order is {escrow['status']} - "
+                f"payment has already been initialized."}
+    if escrow["status"] not in ("QUOTE_REQUIRED", "QUOTE_PENDING", "QUOTE_READY"):
+        return {"ok": False, "error": f"Order is not awaiting a logistics quote ({escrow['status']})."}
+    if quote_amount <= 0:
+        return {"ok": False, "error": "Quote amount must be greater than zero."}
+
+    provider = _get_provider_by_phone_or_id(logistics_provider_id)
+    if logistics_provider_id and not provider:
+        return {"ok": False, "error": "Selected logistics provider was not found."}
+    if provider and provider["kyc_status"] != "VERIFIED":
+        return {"ok": False, "error": "Only verified logistics providers can be selected for a quote."}
+
+    existing_quote = fetchone("SELECT * FROM logistics_quotes WHERE order_id = ?", (txn_id,))
+    if existing_quote and existing_quote["buyer_accepted_at"]:
+        return {"ok": False, "error": "Buyer has accepted this quote; reopen the order before changing it."}
+
+    fees = fee_service.calculate_logistics_fees(quote_amount)
+    logistics_fee_percent = fee_service.get_platform_config()["logistics_fee_percent"]
+
+    with get_db() as conn:
+        if existing_quote:
+            conn.execute(
+                """UPDATE logistics_quotes
+                   SET pickup_location=?, delivery_location=?,
+                       logistics_provider_id=?, quoted_amount=?,
+                       commission_rate=?, commission_amount=?,
+                       provider_net_amount=?, status='LOCKED',
+                       quoted_by=?, accepted_at=datetime('now'),
+                       expires_at=COALESCE(?, expires_at),
+                       locked_at=datetime('now')
+                   WHERE order_id=?""",
+                (origin, destination, provider["id"] if provider else None,
+                 fees["logistics_amount"], logistics_fee_percent,
+                 fees["logistics_platform_fee"], fees["logistics_settlement_amount"],
+                 quoted_by, expires_at, txn_id),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO logistics_quotes
+                   (order_id, pickup_location, delivery_location,
+                    product_name, quantity, logistics_provider_id,
+                    quoted_amount, commission_rate, commission_amount,
+                    provider_net_amount, status, quoted_by,
+                    accepted_at, expires_at, locked_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'LOCKED', ?,
+                           datetime('now'), ?, datetime('now'))""",
+                (txn_id, origin, destination, escrow["crop"], escrow["quantity_bags"],
+                 provider["id"] if provider else None, fees["logistics_amount"],
+                 logistics_fee_percent, fees["logistics_platform_fee"],
+                 fees["logistics_settlement_amount"], quoted_by, expires_at),
+            )
+
+        log = conn.execute(
+            "SELECT * FROM logistics_log WHERE txn_id = ?", (txn_id,)
+        ).fetchone()
+        if log:
+            conn.execute(
+                """UPDATE logistics_log
+                   SET provider_id=?, origin=?, destination=?, status='QUOTED',
+                       quote_amount=?, platform_fee=?, settlement_amount=?
+                   WHERE txn_id=?""",
+                (provider["id"] if provider else None, origin, destination,
+                 fees["logistics_amount"], fees["logistics_platform_fee"],
+                 fees["logistics_settlement_amount"], txn_id),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO logistics_log
+                   (txn_id, provider_id, origin, destination, status,
+                    quote_amount, platform_fee, settlement_amount)
+                   VALUES (?, ?, ?, ?, 'QUOTED', ?, ?, ?)""",
+                (txn_id, provider["id"] if provider else None, origin, destination,
+                 fees["logistics_amount"], fees["logistics_platform_fee"],
+                 fees["logistics_settlement_amount"]),
+            )
+        conn.execute(
+            """UPDATE escrow_ledger
+               SET logistics_amount=?, logistics_platform_fee=?,
+                   logistics_settlement_amount=?,
+                   buyer_total = product_amount + buyer_platform_fee + ?,
+                   sowtrust_total_revenue = buyer_platform_fee + seller_platform_fee + ?,
+                   status='QUOTE_READY'
+               WHERE txn_id=?""",
+            (fees["logistics_amount"], fees["logistics_platform_fee"],
+             fees["logistics_settlement_amount"],
+             fees["logistics_amount"], fees["logistics_platform_fee"], txn_id),
+        )
+    return {"ok": True, **fees}
+
+
+def accept_locked_quote(txn_id: str, buyer_phone: str) -> dict:
+    escrow = fetchone(
+        "SELECT * FROM escrow_ledger WHERE txn_id = ? AND buyer_phone = ?",
+        (txn_id, buyer_phone),
+    )
+    if not escrow:
+        return {"ok": False, "error": "Order not found."}
+    if escrow["status"] == "BUYER_ACCEPTED_QUOTE":
+        return {"ok": True, "already_accepted": True}
+    if escrow["status"] != "QUOTE_READY":
+        return {"ok": False, "error": f"Order is not ready for quote acceptance ({escrow['status']})."}
+
+    quote = fetchone(
+        """SELECT * FROM logistics_quotes
+           WHERE order_id = ? AND status = 'LOCKED'
+             AND (expires_at IS NULL OR expires_at > datetime('now'))""",
+        (txn_id,),
+    )
+    if not quote:
+        return {"ok": False, "error": "No active locked quote is available for this order."}
+
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE logistics_quotes
+               SET buyer_accepted_at=datetime('now')
+               WHERE id=? AND buyer_accepted_at IS NULL""",
+            (quote["id"],),
+        )
+        conn.execute(
+            "UPDATE escrow_ledger SET status='BUYER_ACCEPTED_QUOTE' WHERE txn_id=?",
+            (txn_id,),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
+            (buyer_phone, "LOGISTICS_QUOTE_ACCEPTED",
+             f"TXN:{txn_id} QUOTE:{quote['quoted_amount']}"),
+        )
+    return {"ok": True}
+
+
 def assign_provider(txn_id: str, provider_phone: str) -> dict:
     """
     A verified provider takes the job. Generates the DELIVERY code and
@@ -147,8 +473,10 @@ def assign_provider(txn_id: str, provider_phone: str) -> dict:
     log = fetchone("SELECT * FROM logistics_log WHERE txn_id = ?", (txn_id,))
     if not log:
         return {"ok": False, "error": "No logistics job found for that transaction."}
-    if log["provider_id"]:
+    if log["provider_id"] and log["provider_id"] != provider["id"]:
         return {"ok": False, "error": "This job is already assigned to another provider."}
+    if log["status"] == "ASSIGNED":
+        return {"ok": False, "error": "This job is already assigned."}
 
     escrow = fetchone("SELECT * FROM escrow_ledger WHERE txn_id = ?", (txn_id,))
     if not escrow or escrow["status"] != "ESCROW_LOCKED":
@@ -304,15 +632,17 @@ def mark_payout_failed(transfer_code: str, reason: str) -> dict:
     return {"ok": True}
 
 
-def get_available_jobs(limit: int = 5):
+def get_available_jobs(provider_phone: str = None, limit: int = 5):
     """Quoted jobs with confirmed buyer payment, not yet assigned."""
+    provider = get_provider(provider_phone) if provider_phone else None
+    provider_id = provider["id"] if provider else None
     return fetchall(
         """SELECT l.*, e.crop, e.quantity_bags
            FROM   logistics_log l
            JOIN   escrow_ledger e ON e.txn_id = l.txn_id
-           WHERE  l.provider_id IS NULL
+           WHERE  (l.provider_id IS NULL OR l.provider_id = ?)
              AND  l.status = 'QUOTED'
              AND  e.status = 'ESCROW_LOCKED'
            ORDER  BY l.created_at DESC LIMIT ?""",
-        (limit,),
+        (provider_id, limit),
     )

@@ -189,6 +189,30 @@ CREATE TABLE IF NOT EXISTS logistics_log (
 );
 
 -- ─── USSD SESSIONS (must be shared across gunicorn workers) ────────────────
+-- Logistics quote source of truth: quote-before-payment workflow
+CREATE TABLE IF NOT EXISTS logistics_quotes (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id              TEXT NOT NULL UNIQUE REFERENCES escrow_ledger(txn_id),
+    pickup_location       TEXT NOT NULL,
+    delivery_location     TEXT NOT NULL,
+    product_name          TEXT NOT NULL,
+    quantity              INTEGER NOT NULL DEFAULT 1,
+    logistics_provider_id INTEGER REFERENCES logistics_providers(id),
+    quoted_amount         REAL,
+    commission_rate       REAL DEFAULT 2.5,
+    commission_amount     REAL,
+    provider_net_amount   REAL,
+    status                TEXT NOT NULL DEFAULT 'PENDING',
+    quoted_by             TEXT,
+    created_at            TEXT DEFAULT (datetime('now')),
+    accepted_at           TEXT,
+    expires_at            TEXT,
+    buyer_accepted_at     TEXT,
+    locked_at             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_logistics_quotes_order ON logistics_quotes(order_id);
+CREATE INDEX IF NOT EXISTS idx_logistics_quotes_status ON logistics_quotes(status);
+
 CREATE TABLE IF NOT EXISTS ussd_sessions (
     phone        TEXT PRIMARY KEY,
     data         TEXT NOT NULL,

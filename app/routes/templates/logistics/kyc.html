@@ -1,0 +1,45 @@
+{% extends "logistics/base.html" %}
+{% block title %}Verify your account — Sowtrust Logistics{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Verify your account</h1>
+
+  {% if provider.kyc_status == 'UNDER_REVIEW' %}
+    <p class="muted">Your verification is submitted and awaiting review.</p>
+  {% else %}
+    {% if provider.kyc_status == 'REJECTED' %}
+      <div class="flash error">
+        Your last submission was rejected{% if provider.kyc_rejection_reason %}: {{ provider.kyc_rejection_reason }}{% endif %}.
+        Please correct the issue and resubmit below.
+      </div>
+    {% endif %}
+
+    <form method="post" enctype="multipart/form-data">
+      <label>ID type</label>
+      <select name="id_type" required>
+        <option value="" disabled selected>Select one</option>
+        {% for t in id_types %}
+          <option value="{{ t }}">{{ t }}</option>
+        {% endfor %}
+      </select>
+
+      <label>ID number</label>
+      <input type="text" name="id_number" required>
+
+      <label>Upload ID document (PDF, JPG, or PNG — max 5MB)</label>
+      <input type="file" name="id_document" accept=".pdf,.jpg,.jpeg,.png" required>
+
+      <label>Driver's licence number (if applicable)</label>
+      <input type="text" name="drivers_license_number">
+
+      <label>Upload driver's licence (if applicable)</label>
+      <input type="file" name="drivers_license_document" accept=".pdf,.jpg,.jpeg,.png">
+
+      <label>Upload vehicle registration document</label>
+      <input type="file" name="vehicle_registration_document" accept=".pdf,.jpg,.jpeg,.png" required>
+
+      <button type="submit">Submit for review</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

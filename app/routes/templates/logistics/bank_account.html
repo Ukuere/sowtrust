@@ -1,0 +1,17 @@
+{% extends "logistics/base.html" %}
+{% block title %}Payout account — Sowtrust Logistics{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Add your payout account</h1>
+  <p class="muted">We verify this with Paystack before saving it, so you can confirm it's really yours.</p>
+  <form method="post">
+    <label>Bank code</label>
+    <input type="text" name="bank_code" placeholder="e.g. 058 (GTBank)" required>
+
+    <label>Account number</label>
+    <input type="text" name="account_number" required>
+
+    <button type="submit">Verify and save</button>
+  </form>
+</div>
+{% endblock %}
