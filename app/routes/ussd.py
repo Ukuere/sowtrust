@@ -162,11 +162,18 @@ def ussd_handler():
                 price = float(price_str)
                 with get_db() as conn:
                     conn.execute(
-                        "UPDATE farmers SET price=? WHERE phone=?", (price, phone)
+                        """UPDATE farmers
+                           SET price=?, listing_status=CASE
+                                 WHEN product_image_path IS NULL OR product_image_path='' THEN 'DRAFT'
+                                 ELSE 'PENDING_REVIEW'
+                               END,
+                               listing_updated_at=datetime('now')
+                           WHERE phone=?""",
+                        (price, phone),
                     )
                 return END(
                     f"Price updated to NGN {price:,.0f}/bag.\n"
-                    f"Buyers can now see your listing."
+                    f"An agent must confirm product media before buyers see the listing."
                 )
 
         # 1.3 Release Escrow

@@ -4,9 +4,26 @@
 <meta charset="UTF-8">
 <title>KYC Review — Sowtrust Admin</title>
 <style>
-  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #f7f5f0; margin: 0; padding: 24px; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background:
+      linear-gradient(rgba(247, 245, 240, .84), rgba(247, 245, 240, .92)),
+      url("{{ url_for('static', filename='img/sowtrust-market-bg.png') }}") center / cover fixed;
+    margin: 0;
+    padding: 24px;
+    min-height: 100vh;
+  }
   h1 { font-size: 20px; }
-  .card { background: #fff; border: 1px solid #e2ddd2; border-radius: 8px; padding: 18px; margin-bottom: 14px; max-width: 720px; }
+  .card {
+    background: rgba(255, 255, 255, .93);
+    border: 1px solid rgba(226, 221, 210, .85);
+    border-radius: 8px;
+    padding: 18px;
+    margin-bottom: 14px;
+    max-width: 720px;
+    box-shadow: 0 14px 38px rgba(43, 43, 40, .08);
+    backdrop-filter: blur(6px);
+  }
   .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
   .muted { color: #6b6a63; font-size: 13px; }
   a { color: #124a29; }
@@ -38,10 +55,10 @@
       <div class="row"><span>Buyer type</span><span>{{ v.buyer_type }}</span></div>
       <div class="row"><span>Email</span><span>{{ v.email }}</span></div>
       <div class="row"><span>ID</span><span>{{ v.id_type }} — {{ v.id_number }}</span></div>
-      <div class="row"><span>ID document</span><span><a href="#" title="{{ v.id_document_path }}">{{ v.id_document_path }}</a></span></div>
+      <div class="row"><span>ID document</span><span><a href="{{ url_for('admin_documents.view_document', path=v.id_document_path) }}" title="{{ v.id_document_path }}" target="_blank" rel="noopener">Open document</a></span></div>
       {% if v.business_reg_number %}
         <div class="row"><span>CAC number</span><span>{{ v.business_reg_number }}</span></div>
-        <div class="row"><span>CAC document</span><span>{{ v.business_reg_document_path }}</span></div>
+        <div class="row"><span>CAC document</span><span><a href="{{ url_for('admin_documents.view_document', path=v.business_reg_document_path) }}" title="{{ v.business_reg_document_path }}" target="_blank" rel="noopener">Open document</a></span></div>
         <div class="row"><span>Authorized rep</span><span>{{ v.authorized_rep_name }}</span></div>
       {% endif %}
 

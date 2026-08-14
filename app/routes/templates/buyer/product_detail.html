@@ -6,10 +6,19 @@
 {% if farmers %}
   {% for f in farmers %}
     <div class="card">
+      {% if f.product_image_path %}
+        <img class="product-thumb" src="{{ url_for('product_media.view_product_image', path=f.product_image_path) }}" alt="{{ f.crop }}">
+      {% endif %}
       <div class="row">
         <div>
           <h2 style="margin-bottom:2px;">{{ f.name }}</h2>
           <span class="muted">{{ f.location }}</span>
+          {% if f.product_description %}
+            <p>{{ f.product_description }}</p>
+          {% endif %}
+          {% if f.quantity_available %}
+            <span class="muted">{{ f.quantity_available }} bag{{ 's' if f.quantity_available != 1 else '' }} available</span>
+          {% endif %}
         </div>
         <div style="text-align:right;">
           <div><strong>&#8358;{{ "{:,.0f}".format(f.price) }}</strong> <span class="muted">/ bag</span></div>
@@ -19,6 +28,13 @@
     </div>
   {% endfor %}
 {% else %}
-  <div class="card"><p class="muted">No verified sellers for "{{ crop }}" right now.</p></div>
+  <div class="card">
+    <p class="muted">No published sellers for "{{ crop }}" right now.</p>
+    <form method="post" action="{{ url_for('buyer_web.notify_product', crop=crop) }}">
+      <label>Quantity you need (bags)</label>
+      <input type="number" min="1" name="quantity" value="1">
+      <button type="submit">Notify me when available</button>
+    </form>
+  </div>
 {% endif %}
 {% endblock %}

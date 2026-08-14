@@ -28,7 +28,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, sessio
 
 from app.services import (
     buyer_service, product_service, fee_service, escrow_service,
-    logistics_service, email_service, document_storage,
+    logistics_service, email_service, document_storage, dispute_service,
 )
 from app.models.database import fetchall, fetchone
 
@@ -121,8 +121,10 @@ def browse():
 @login_required
 def product_detail(crop):
     farmers, canonical_crop = product_service.find_farmers_for_product(crop, limit=15)
+    buyer = buyer_service.get_buyer(session["buyer_phone"])
     return render_template(
-        "buyer/product_detail.html", crop=canonical_crop or crop, farmers=farmers
+        "buyer/product_detail.html", crop=canonical_crop or crop, farmers=farmers,
+        buyer=buyer
     )
 
 
@@ -139,7 +141,8 @@ def checkout(farmer_phone, crop):
     farmer = fetchone(
         """SELECT * FROM farmers
            WHERE phone = ? AND LOWER(crop) = LOWER(?)
-             AND price > 0 AND kyc_status = 'VERIFIED' AND is_active = 1""",
+             AND price > 0 AND kyc_status = 'VERIFIED' AND is_active = 1
+             AND COALESCE(listing_status, 'PUBLISHED') = 'PUBLISHED'""",
         (farmer_phone, crop),
     )
     if not farmer:
@@ -285,7 +288,14 @@ def order_detail(txn_id):
         flash("Order not found.", "error")
         return redirect(url_for("buyer_web.orders"))
     quote = logistics_service.get_quote_for_order(txn_id)
-    return render_template("buyer/order_detail.html", order=dict(row), quote=quote)
+    dispute = dispute_service.get_dispute_for_order(txn_id)
+    return render_template(
+        "buyer/order_detail.html",
+        order=dict(row),
+        quote=quote,
+        dispute=dispute,
+        dispute_reasons=dispute_service.DISPUTE_REASONS,
+    )
 
 
 @buyer_web_bp.route("/orders/<txn_id>/accept-quote", methods=["POST"])
@@ -302,4 +312,39 @@ def accept_quote(txn_id):
         return redirect(url_for("buyer_web.order_detail", txn_id=txn_id))
 
     flash("Quote accepted. Transfer the exact amount shown to lock escrow.", "success")
+    return redirect(url_for("buyer_web.order_detail", txn_id=txn_id))
+
+
+@buyer_web_bp.route("/product/<crop>/notify", methods=["POST"])
+@login_required
+def notify_product(crop):
+    buyer = buyer_service.get_buyer(session["buyer_phone"])
+    result = product_service.create_buyer_product_interest(
+        buyer_phone=session["buyer_phone"],
+        crop=crop,
+        quantity=request.form.get("quantity", 1),
+        location=", ".join(part for part in [
+            buyer.get("delivery_address"), buyer.get("city"), buyer.get("state")
+        ] if part),
+    )
+    if not result["ok"]:
+        flash(result["error"], "error")
+    else:
+        flash("We'll notify you when this product is published by a verified farmer.", "success")
+    return redirect(url_for("buyer_web.product_detail", crop=crop))
+
+
+@buyer_web_bp.route("/orders/<txn_id>/dispute", methods=["POST"])
+@login_required
+def open_dispute(txn_id):
+    result = dispute_service.create_buyer_dispute(
+        txn_id=txn_id,
+        buyer_phone=session["buyer_phone"],
+        reason=request.form.get("reason", ""),
+        details=request.form.get("details", ""),
+    )
+    if not result["ok"]:
+        flash(result["error"], "error")
+    else:
+        flash(f"Dispute {result['dispute_id']} opened. Operations will review it.", "success")
     return redirect(url_for("buyer_web.order_detail", txn_id=txn_id))

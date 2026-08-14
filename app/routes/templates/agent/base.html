@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Sowtrust{% endblock %}</title>
+<title>{% block title %}Sowtrust Agents{% endblock %}</title>
 <style>
   :root {
     --green: #1c6b3c; --green-dark: #124a29; --bg: #f7f5f0;
@@ -35,10 +35,11 @@
   h1 { font-size: 22px; margin: 0 0 16px; }
   h2 { font-size: 17px; margin: 0 0 8px; }
   label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
-  input {
+  input, textarea {
     width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px;
-    font-size: 15px;
+    font-size: 15px; font-family: inherit;
   }
+  textarea { min-height: 92px; resize: vertical; }
   button, .btn {
     display: inline-block; background: var(--green); color: #fff; border: none;
     padding: 11px 18px; border-radius: 6px; font-size: 15px; cursor: pointer;
@@ -49,38 +50,20 @@
   .flash.success { background: #e3f3e8; color: #1c6b3c; }
   .flash.error { background: #fbe8e6; color: #a4342a; }
   .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
-  .row.total { font-weight: 700; border-top: 1px solid var(--border); margin-top: 6px; padding-top: 10px; }
   .muted { color: var(--muted); font-size: 13px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
-  .product-thumb {
-    width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 8px;
-    border: 1px solid rgba(226, 221, 210, .9); margin-bottom: 12px;
-    background: #f1eee6;
-  }
-  textarea {
-    width: 100%; min-height: 92px; padding: 10px; border: 1px solid var(--border);
-    border-radius: 6px; font-size: 15px; font-family: inherit; resize: vertical;
-  }
-  .status { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-  .status.QUOTE_PENDING { background: #eee7ff; color: #4b3a7a; }
-  .status.QUOTE_READY, .status.BUYER_ACCEPTED_QUOTE { background: #e3f3e8; color: #1c6b3c; }
-  .status.PENDING_PAYMENT { background: #fff3cd; color: #8a6d00; }
-  .status.ESCROW_LOCKED { background: #d9edf7; color: #26647a; }
-  .status.DELIVERED { background: #e3f3e8; color: #1c6b3c; }
-  .status.EXPIRED, .status.CANCELLED, .status.DISPUTED, .status.PAYOUT_FAILED { background: #fbe8e6; color: #a4342a; }
   a.plain { color: var(--green-dark); }
 </style>
 </head>
 <body>
 <header>
-  <a href="{{ url_for('buyer_web.browse') }}">🌱 Sowtrust</a>
+  <a href="{{ url_for('agent_web.dashboard') }}">Sowtrust Agents</a>
   <nav>
-    {% if session.get('buyer_phone') %}
-      <a href="{{ url_for('buyer_web.browse') }}">Browse</a>
-      <a href="{{ url_for('buyer_web.orders') }}">My Orders</a>
-      <a href="{{ url_for('buyer_web.logout') }}">Log out</a>
+    {% if session.get('agent_phone') %}
+      <a href="{{ url_for('agent_web.dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('agent_web.new_listing') }}">New listing</a>
+      <a href="{{ url_for('agent_web.logout') }}">Log out</a>
     {% else %}
-      <a href="{{ url_for('buyer_web.login') }}">Log in</a>
+      <a href="{{ url_for('agent_web.login') }}">Log in</a>
     {% endif %}
   </nav>
 </header>

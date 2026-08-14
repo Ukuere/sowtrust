@@ -23,7 +23,11 @@ def require_admin(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         auth = request.authorization
-        if not auth or auth.password != config.DASHBOARD_PASSWORD:
+        username_ok = (
+            not config.DASHBOARD_USERNAME
+            or auth and auth.username == config.DASHBOARD_USERNAME
+        )
+        if not auth or not username_ok or auth.password != config.DASHBOARD_PASSWORD:
             return _unauthorized()
         return view(*args, **kwargs)
     return wrapped

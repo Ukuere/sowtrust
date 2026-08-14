@@ -67,6 +67,8 @@ cp .env.example .env
 python migrations/init_db.py
 python migrations/add_products_table.py
 python migrations/add_payments_columns.py
+python migrations/add_logistics_quotes.py
+python migrations/add_production_mvp_workflows.py
 ```
 
 ### 4. (Optional) Seed Demo Data
@@ -199,6 +201,56 @@ Farmer dials *709# → 1 → 3
 - Register as field agent
 - Verify farmer KYC
 - View recruit count
+- Web product media workflow: `/agent/`
+  - Agents log in with their existing phone/PIN.
+  - Agents upload product photo, quantity, price, description, and farmer phone.
+  - Listings enter `PENDING_REVIEW` until admin publishes them.
+
+## Admin Operations URLs
+- Buyer KYC: `/admin/kyc/`
+- Logistics KYC and quote locking: `/admin/logistics/`
+- Product publication review and notification audit: `/admin/products/`
+- Dispute review: `/admin/disputes/`
+- Audit log and readiness dashboard: `/admin/audit/`
+- Readiness check: `/health/ready`
+
+Set `DASHBOARD_ADMIN_USERNAME` and `DASHBOARD_ADMIN_PASSWORD` in production.
+If `DASHBOARD_ADMIN_USERNAME` is blank, only the password is checked for
+backward compatibility.
+
+## Product Publishing Workflow
+```
+Farmer registers over USSD
+  -> Agent verifies farmer
+  -> Agent uploads product media/details at /agent/
+  -> Listing status PENDING_REVIEW
+  -> Operations reviews at /admin/products/
+  -> Listing becomes PUBLISHED
+  -> Buyers see product image/details
+  -> Matching open buyer requests are notified by NotificationService
+```
+
+## Dispute Workflow
+```
+Buyer opens dispute from order page
+  -> Order moves to DISPUTED
+  -> Release is blocked while status is DISPUTED
+  -> Operations reviews at /admin/disputes/
+  -> Admin records resolution and next action
+```
+
+## Production Hardening
+- `/health/ready` reports missing critical launch configuration.
+- Set `ENFORCE_PRODUCTION_CONFIG=1` to fail startup when critical secrets
+  such as `FLASK_SECRET_KEY`, `DASHBOARD_ADMIN_PASSWORD`, or
+  `PAYSTACK_SECRET_KEY` are unsafe/missing.
+- Sensitive routes have lightweight per-process rate limiting via
+  `RATE_LIMIT_PER_MINUTE`.
+- Security headers are applied to every response.
+- KYC documents stay behind admin-authenticated document routes.
+- Product media is served only from the configured product media folder.
+- Run database backups from a scheduler:
+  `python scripts/backup_db.py`
 
 ---
 

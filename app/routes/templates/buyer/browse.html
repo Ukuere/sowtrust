@@ -23,8 +23,14 @@
     {% for p in products %}
       <a class="card" style="text-decoration:none; color:inherit;"
          href="{{ url_for('buyer_web.product_detail', crop=p.name) }}">
+        {% if p.product_image_path %}
+          <img class="product-thumb" src="{{ url_for('product_media.view_product_image', path=p.product_image_path) }}" alt="{{ p.name }}">
+        {% endif %}
         <h2>{{ p.name }}</h2>
-        <span class="muted">{{ p.seller_count }} seller{{ 's' if p.seller_count != 1 else '' }} available</span>
+        <span class="muted">
+          {{ p.seller_count }} seller{{ 's' if p.seller_count != 1 else '' }} available
+          {% if p.min_price %}from &#8358;{{ "{:,.0f}".format(p.min_price) }} / bag{% endif %}
+        </span>
       </a>
     {% endfor %}
   </div>

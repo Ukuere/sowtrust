@@ -1,0 +1,14 @@
+{% extends "agent/base.html" %}
+{% block title %}Agent Login - Sowtrust{% endblock %}
+{% block content %}
+<h1>Agent login</h1>
+<div class="card">
+  <form method="post">
+    <label>Phone number</label>
+    <input name="phone" required>
+    <label>Agent PIN</label>
+    <input name="pin" type="password" inputmode="numeric" required>
+    <button type="submit">Log in</button>
+  </form>
+</div>
+{% endblock %}

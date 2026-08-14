@@ -17,9 +17,15 @@ class Config:
     SECRET_KEY: str = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")
     PORT: int = int(os.getenv("FLASK_PORT", 5000))
     DEBUG: bool = os.getenv("FLASK_ENV", "production") == "development"
+    ENV: str = os.getenv("FLASK_ENV", "production")
+    PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "")
+    ENFORCE_PRODUCTION_CONFIG: bool = os.getenv("ENFORCE_PRODUCTION_CONFIG", "0") == "1"
+    RATE_LIMIT_PER_MINUTE: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "120"))
 
     # Database
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "agrihub.db")
+    UPLOAD_FOLDER: str = os.getenv("UPLOAD_FOLDER", "uploads")
+    STORAGE_BACKEND: str = os.getenv("STORAGE_BACKEND", "local")
 
     # Business Rules
     SERVICE_FEE_PERCENT: float = float(os.getenv("SERVICE_FEE_PERCENT", 2.5))
@@ -64,6 +70,7 @@ class Config:
 
     # Dashboard
     DASHBOARD_PASSWORD: str = os.getenv("DASHBOARD_ADMIN_PASSWORD", "changeme")
+    DASHBOARD_USERNAME: str = os.getenv("DASHBOARD_ADMIN_USERNAME", "")
 
 
 config = Config()

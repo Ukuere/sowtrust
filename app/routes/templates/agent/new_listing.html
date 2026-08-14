@@ -1,0 +1,32 @@
+{% extends "agent/base.html" %}
+{% block title %}New Product Listing - Sowtrust{% endblock %}
+{% block content %}
+<p><a class="plain" href="{{ url_for('agent_web.dashboard') }}">&larr; Dashboard</a></p>
+<h1>Submit product listing</h1>
+<div class="card">
+  <form method="post" enctype="multipart/form-data">
+    <label>Verified farmer phone</label>
+    <input name="farmer_phone" value="{{ form.farmer_phone or '' }}" required>
+
+    <label>Product name</label>
+    <input name="crop" value="{{ form.crop or '' }}" placeholder="Maize" required>
+
+    <label>Pickup location</label>
+    <input name="location" value="{{ form.location or '' }}" required>
+
+    <label>Price per bag (NGN)</label>
+    <input name="price" type="number" min="1" step="0.01" value="{{ form.price or '' }}" required>
+
+    <label>Quantity available (bags)</label>
+    <input name="quantity_available" type="number" min="1" value="{{ form.quantity_available or '' }}" required>
+
+    <label>Product notes</label>
+    <textarea name="description" placeholder="Grade, harvest date, moisture level, packaging, or other useful buyer details">{{ form.description or '' }}</textarea>
+
+    <label>Product image</label>
+    <input name="product_image" type="file" accept="image/png,image/jpeg" required>
+
+    <button type="submit">Submit for review</button>
+  </form>
+</div>
+{% endblock %}

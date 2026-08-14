@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Audit - Sowtrust Admin</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background:
+      linear-gradient(rgba(247, 245, 240, .84), rgba(247, 245, 240, .92)),
+      url("{{ url_for('static', filename='img/sowtrust-market-bg.png') }}") center / cover fixed;
+    margin: 0; padding: 24px; min-height: 100vh; color: #2b2b28;
+  }
+  h1, h2 { font-size: 20px; }
+  h2 { margin-top: 28px; }
+  .card {
+    background: rgba(255, 255, 255, .93); border: 1px solid rgba(226, 221, 210, .85);
+    border-radius: 8px; padding: 18px; margin-bottom: 14px; max-width: 900px;
+    box-shadow: 0 14px 38px rgba(43, 43, 40, .08); backdrop-filter: blur(6px);
+  }
+  .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; gap: 16px; }
+  .muted { color: #6b6a63; font-size: 13px; }
+  .status { display:inline-block; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+  .ready { background:#e3f3e8; color:#1c6b3c; }
+  .blocked { background:#fbe8e6; color:#a4342a; }
+</style>
+</head>
+<body>
+<h1>Audit and readiness</h1>
+
+<div class="card">
+  <h2>Readiness</h2>
+  <span class="status {{ 'ready' if readiness.ready else 'blocked' }}">{{ 'READY' if readiness.ready else 'NOT READY' }}</span>
+  {% if readiness.issues %}
+    <h2>Issues</h2>
+    {% for issue in readiness.issues %}
+      <p>{{ issue }}</p>
+    {% endfor %}
+  {% endif %}
+  {% if readiness.warnings %}
+    <h2>Warnings</h2>
+    {% for warning in readiness.warnings %}
+      <p class="muted">{{ warning }}</p>
+    {% endfor %}
+  {% endif %}
+</div>
+
+<h2>Recent audit log</h2>
+{% if audit_log %}
+  {% for item in audit_log %}
+    <div class="card">
+      <div class="row"><strong>{{ item.action }}</strong><span class="muted">{{ item.created_at }}</span></div>
+      <div class="row"><span>Actor</span><span>{{ item.actor }}</span></div>
+      {% if item.details %}<p>{{ item.details }}</p>{% endif %}
+      {% if item.ip_address %}<p class="muted">{{ item.ip_address }}</p>{% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No audit events recorded yet.</p>
+{% endif %}
+</body>
+</html>

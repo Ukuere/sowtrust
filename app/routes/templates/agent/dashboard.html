@@ -1,0 +1,11 @@
+{% extends "agent/base.html" %}
+{% block title %}Agent Dashboard - Sowtrust{% endblock %}
+{% block content %}
+<h1>Agent dashboard</h1>
+<div class="card">
+  <h2>{{ agent.name }}</h2>
+  <div class="row"><span>Location</span><span>{{ agent.location }}</span></div>
+  <div class="row"><span>Farmers verified</span><span>{{ agent.recruits }}</span></div>
+  <a class="btn" href="{{ url_for('agent_web.new_listing') }}">Submit product listing</a>
+</div>
+{% endblock %}

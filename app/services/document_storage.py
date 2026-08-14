@@ -13,13 +13,15 @@ the implementation later doesn't require touching any caller.
 """
 import os
 import uuid
+from config.settings import config
 
 ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg", "png"}
+ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png"}
 MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB
 
 
 def _upload_root() -> str:
-    return os.environ.get("UPLOAD_FOLDER", "uploads")
+    return config.UPLOAD_FOLDER
 
 
 def save_kyc_document(file_storage, subfolder: str = "kyc") -> dict:
@@ -41,6 +43,36 @@ def save_kyc_document(file_storage, subfolder: str = "kyc") -> dict:
         return {"ok": False, "error": "File must be under 5MB."}
     if size == 0:
         return {"ok": False, "error": "That file appears to be empty."}
+
+    folder = os.path.join(_upload_root(), subfolder)
+    os.makedirs(folder, exist_ok=True)
+
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    full_path = os.path.join(folder, filename)
+    file_storage.save(full_path)
+
+    return {"ok": True, "path": full_path}
+
+
+def save_product_image(file_storage, subfolder: str = "product_media") -> dict:
+    """
+    Save product listing images uploaded by agents/operations. Farmers do
+    not upload images over USSD; this supports the assisted media workflow.
+    """
+    if not file_storage or not file_storage.filename:
+        return {"ok": False, "error": "Upload a product image."}
+
+    ext = file_storage.filename.rsplit(".", 1)[-1].lower() if "." in file_storage.filename else ""
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        return {"ok": False, "error": "Product image must be a JPG or PNG."}
+
+    file_storage.stream.seek(0, os.SEEK_END)
+    size = file_storage.stream.tell()
+    file_storage.stream.seek(0)
+    if size > MAX_FILE_SIZE_BYTES:
+        return {"ok": False, "error": "Product image must be under 5MB."}
+    if size == 0:
+        return {"ok": False, "error": "That product image appears to be empty."}
 
     folder = os.path.join(_upload_root(), subfolder)
     os.makedirs(folder, exist_ok=True)

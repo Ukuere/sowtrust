@@ -65,6 +65,33 @@
     <p class="muted" style="margin-top:14px;">
       This order was {{ order.status.lower() }}{% if order.status == 'EXPIRED' %} and refunded{% endif %}.
     </p>
+  {% elif order.status == 'DISPUTED' %}
+    <p class="muted" style="margin-top:14px;">This order is under SowTrust Operations review.</p>
   {% endif %}
 </div>
+
+{% if dispute %}
+  <div class="card">
+    <h2>Dispute {{ dispute.dispute_id }}</h2>
+    <div class="row"><span>Status</span><span>{{ dispute.status.replace('_', ' ') }}</span></div>
+    <div class="row"><span>Reason</span><span>{{ dispute.reason }}</span></div>
+    {% if dispute.details %}<p>{{ dispute.details }}</p>{% endif %}
+    {% if dispute.resolution %}<p class="muted">{{ dispute.resolution }}</p>{% endif %}
+  </div>
+{% elif order.status in ['ESCROW_LOCKED', 'LOGISTICS_ASSIGNED', 'PICKED_UP', 'IN_TRANSIT', 'DELIVERED_PENDING_CONFIRMATION'] %}
+  <div class="card">
+    <h2>Report a problem</h2>
+    <form method="post" action="{{ url_for('buyer_web.open_dispute', txn_id=order.txn_id) }}">
+      <label>Reason</label>
+      <select name="reason" required style="width:100%; padding:10px; border:1px solid var(--border); border-radius:6px; font-size:15px;">
+        {% for reason in dispute_reasons %}
+          <option value="{{ reason }}">{{ reason }}</option>
+        {% endfor %}
+      </select>
+      <label>Details</label>
+      <textarea name="details" placeholder="Explain what happened"></textarea>
+      <button type="submit">Open dispute</button>
+    </form>
+  </div>
+{% endif %}
 {% endblock %}

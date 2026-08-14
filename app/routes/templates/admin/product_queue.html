@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Product Review - Sowtrust Admin</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background:
+      linear-gradient(rgba(247, 245, 240, .84), rgba(247, 245, 240, .92)),
+      url("{{ url_for('static', filename='img/sowtrust-market-bg.png') }}") center / cover fixed;
+    margin: 0; padding: 24px; min-height: 100vh; color: #2b2b28;
+  }
+  h1, h2 { font-size: 20px; }
+  h2 { margin-top: 28px; }
+  .card {
+    background: rgba(255, 255, 255, .93); border: 1px solid rgba(226, 221, 210, .85);
+    border-radius: 8px; padding: 18px; margin-bottom: 14px; max-width: 820px;
+    box-shadow: 0 14px 38px rgba(43, 43, 40, .08); backdrop-filter: blur(6px);
+  }
+  .listing { display: grid; grid-template-columns: 180px 1fr; gap: 16px; }
+  img { width: 180px; height: 140px; object-fit: cover; border-radius: 8px; border: 1px solid #e2ddd2; }
+  .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; gap: 16px; }
+  .muted { color: #6b6a63; font-size: 13px; }
+  form.inline { display: inline-block; margin-right: 8px; }
+  button { padding: 8px 14px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  button.approve { background: #1c6b3c; color: #fff; }
+  button.reject { background: #a4342a; color: #fff; }
+  input[type=text] { padding: 6px; border: 1px solid #e2ddd2; border-radius: 4px; font-size: 13px; width: 240px; }
+  .flash { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 14px; max-width: 820px; }
+  .flash.success { background: #e3f3e8; color: #1c6b3c; }
+  .flash.error { background: #fbe8e6; color: #a4342a; }
+  @media (max-width: 640px) {
+    .listing { grid-template-columns: 1fr; }
+    img { width: 100%; height: auto; aspect-ratio: 4 / 3; }
+    .row { display: block; }
+  }
+</style>
+</head>
+<body>
+<h1>Product listing review queue</h1>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="flash {{ category }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+
+{% if listings %}
+  {% for f in listings %}
+    <div class="card listing">
+      <div>
+        {% if f.product_image_path %}
+          <img src="{{ url_for('product_media.view_product_image', path=f.product_image_path) }}" alt="{{ f.crop }}">
+        {% endif %}
+      </div>
+      <div>
+        <div class="row"><strong>{{ f.crop }}</strong><span class="muted">{{ f.listing_status }}</span></div>
+        <div class="row"><span>Farmer</span><span>{{ f.name }} - {{ f.phone }}</span></div>
+        <div class="row"><span>Location</span><span>{{ f.location }}</span></div>
+        <div class="row"><span>Price</span><span>&#8358;{{ "{:,.2f}".format(f.price or 0) }} / bag</span></div>
+        <div class="row"><span>Quantity</span><span>{{ f.quantity_available or 0 }} bags</span></div>
+        {% if f.product_description %}
+          <p>{{ f.product_description }}</p>
+        {% endif %}
+        {% if f.listing_rejection_reason %}
+          <p class="muted">Previous rejection: {{ f.listing_rejection_reason }}</p>
+        {% endif %}
+        <form class="inline" method="post" action="{{ url_for('admin_products.decide', farmer_phone=f.phone) }}">
+          <input type="hidden" name="decision" value="PUBLISHED">
+          <button type="submit" class="approve">Publish</button>
+        </form>
+        <form class="inline" method="post" action="{{ url_for('admin_products.decide', farmer_phone=f.phone) }}"
+              onsubmit="return this.rejection_reason.value.trim().length > 0 || alert('Enter a rejection reason.');">
+          <input type="hidden" name="decision" value="REJECTED">
+          <input type="text" name="rejection_reason" placeholder="Rejection reason">
+          <button type="submit" class="reject">Reject</button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No product listings pending review.</p>
+{% endif %}
+
+<h2>Recent notifications</h2>
+{% if notifications %}
+  {% for n in notifications %}
+    <div class="card">
+      <div class="row"><strong>{{ n.event_type }}</strong><span class="muted">{{ n.status }} - {{ n.created_at }}</span></div>
+      <div class="row"><span>Recipient</span><span>{{ n.phone or n.email or n.recipient_id }}</span></div>
+      <p>{{ n.message }}</p>
+      {% if n.error %}<p class="muted">{{ n.error }}</p>{% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No notifications recorded yet.</p>
+{% endif %}
+</body>
+</html>

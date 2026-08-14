@@ -4,9 +4,26 @@
 <meta charset="UTF-8">
 <title>Logistics KYC Review — Sowtrust Admin</title>
 <style>
-  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #f7f5f0; margin: 0; padding: 24px; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background:
+      linear-gradient(rgba(247, 245, 240, .84), rgba(247, 245, 240, .92)),
+      url("{{ url_for('static', filename='img/sowtrust-market-bg.png') }}") center / cover fixed;
+    margin: 0;
+    padding: 24px;
+    min-height: 100vh;
+  }
   h1 { font-size: 20px; }
-  .card { background: #fff; border: 1px solid #e2ddd2; border-radius: 8px; padding: 18px; margin-bottom: 14px; max-width: 720px; }
+  .card {
+    background: rgba(255, 255, 255, .93);
+    border: 1px solid rgba(226, 221, 210, .85);
+    border-radius: 8px;
+    padding: 18px;
+    margin-bottom: 14px;
+    max-width: 720px;
+    box-shadow: 0 14px 38px rgba(43, 43, 40, .08);
+    backdrop-filter: blur(6px);
+  }
   .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
   .muted { color: #6b6a63; font-size: 13px; }
   form.inline { display: inline-block; margin-right: 8px; }
@@ -90,11 +107,11 @@
       <div class="row"><span>Operating area</span><span>{{ v.operating_area }}</span></div>
       <div class="row"><span>Vehicle</span><span>{{ v.vehicle_type }} — {{ v.vehicle_registration }}</span></div>
       <div class="row"><span>ID</span><span>{{ v.id_type }} — {{ v.id_number }}</span></div>
-      <div class="row"><span>ID document</span><span>{{ v.id_document_path }}</span></div>
+      <div class="row"><span>ID document</span><span><a href="{{ url_for('admin_documents.view_document', path=v.id_document_path) }}" title="{{ v.id_document_path }}" target="_blank" rel="noopener">Open document</a></span></div>
       {% if v.drivers_license_number %}
         <div class="row"><span>Driver's licence</span><span>{{ v.drivers_license_number }}</span></div>
       {% endif %}
-      <div class="row"><span>Vehicle reg. document</span><span>{{ v.vehicle_registration_document_path }}</span></div>
+      <div class="row"><span>Vehicle reg. document</span><span><a href="{{ url_for('admin_documents.view_document', path=v.vehicle_registration_document_path) }}" title="{{ v.vehicle_registration_document_path }}" target="_blank" rel="noopener">Open document</a></span></div>
 
       <form class="inline" method="post" action="{{ url_for('admin_logistics.decide', verification_id=v.id) }}">
         <input type="hidden" name="decision" value="VERIFIED">

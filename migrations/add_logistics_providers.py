@@ -75,6 +75,35 @@ def migrate():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_logistics_providers_phone ON logistics_providers(phone)"
         )
+        _add_column_if_missing(conn, "logistics_providers", "provider_uuid", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "name", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "business_name", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "phone", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "email", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "address", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "operating_area", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "pin_hash", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "vehicle_type", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "vehicle_registration", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "vehicle_capacity_kg", "REAL")
+        _add_column_if_missing(conn, "logistics_providers", "bank_code", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "bank_account_number", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "bank_account_name", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "bank_verified_at", "TEXT")
+        _add_column_if_missing(conn, "logistics_providers", "kyc_status", "TEXT DEFAULT 'PENDING'")
+        _add_column_if_missing(conn, "logistics_providers", "is_active", "INTEGER DEFAULT 1")
+        _add_column_if_missing(conn, "logistics_providers", "completed_jobs", "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, "logistics_providers", "rating", "REAL DEFAULT 0.0")
+        _add_column_if_missing(conn, "logistics_providers", "created_at", "TEXT")
+        conn.execute(
+            """UPDATE logistics_providers
+               SET provider_uuid = COALESCE(provider_uuid, lower(hex(randomblob(16)))),
+                   kyc_status = COALESCE(kyc_status, 'PENDING'),
+                   is_active = COALESCE(is_active, 1),
+                   completed_jobs = COALESCE(completed_jobs, 0),
+                   rating = COALESCE(rating, 0.0),
+                   created_at = COALESCE(created_at, datetime('now'))"""
+        )
         print("  + logistics_providers ready")
 
         print("Logistics log — provider link, delivery code, settlement:")
