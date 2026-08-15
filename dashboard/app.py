@@ -107,6 +107,21 @@ def safe_df(df, cols):
     return df[available]
 
 
+def get_product_names(farmers_df=None):
+    """
+    Products are now dynamic, not config.CROPS. Read them from the products
+    table first, then fall back to farmer crop values for older databases.
+    """
+    products = rdf("SELECT name FROM products ORDER BY name ASC")
+    names = []
+    if not products.empty and "name" in products.columns:
+        names.extend(products["name"].dropna().astype(str).str.strip().tolist())
+    if farmers_df is not None and not farmers_df.empty and "crop" in farmers_df.columns:
+        names.extend(farmers_df["crop"].dropna().astype(str).str.strip().tolist())
+    names = sorted({name for name in names if name})
+    return names or ["Maize", "Rice", "Cassava", "Yam", "Soybeans", "Palm Oil", "Groundnut"]
+
+
 # ─────────────────────────────────────────────────────────
 # LOAD DATA
 # ─────────────────────────────────────────────────────────
@@ -422,7 +437,8 @@ elif page == "👨‍🌾 Farmer Registry":
     st.markdown('<div class="section-bar"><h4>👨‍🌾 Farmer Database</h4></div>', unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
-    crop_filter = col1.selectbox("Filter by Crop", ["All"] + list(config.CROPS.values()))
+    product_names = get_product_names(farmers_df)
+    crop_filter = col1.selectbox("Filter by Crop", ["All"] + product_names)
     kyc_filter = col2.selectbox("Filter by KYC", ["All", "VERIFIED", "PENDING", "SUSPENDED"])
 
     df = farmers_df.copy()
@@ -474,7 +490,8 @@ elif page == "👨‍🌾 Farmer Registry":
 # ─────────────────────────────────────────────────────────
 elif page == "🤖 Market Intelligence":
     st.markdown('<div class="section-bar"><h4>📈 Price Forecast & Market Simulation</h4></div>', unsafe_allow_html=True)
-    crop_sel = st.selectbox("Select Crop to Analyse", list(config.CROPS.values()))
+    product_names = get_product_names(farmers_df)
+    crop_sel = st.selectbox("Select Crop to Analyse", product_names)
 
     np.random.seed(42)
     dates = pd.date_range(end=datetime.today(), periods=30)
