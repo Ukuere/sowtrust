@@ -1,26 +1,15 @@
 """
 Sowtrust — Admin KYC Review.
 
-Spec section 2: "manual verification initially, with the ability to
-integrate a professional third-party KYC/identity verification provider
-later." This is the manual half — a deliberately minimal queue, not a
-full admin dashboard (you may already have one elsewhere given
-DASHBOARD_PASSWORD exists in your .env; I don't have visibility
-into it since it predates what I reconstructed, so this is self-contained
-and doesn't assume anything about it).
-
-Auth: HTTP Basic Auth against DASHBOARD_PASSWORD — same credential
-your existing admin tooling already uses, no new secret to manage. This
-is fine for a single-operator MVP; if multiple reviewers need distinct
-identities (so `reviewed_by` means something more specific than
-"admin"), that needs real accounts — flagging, not building, since you
-didn't ask for that yet.
+Provides the manual-review half of the MVP verification workflow. Each
+decision is attributed to an individual database-backed staff account,
+and the authorization decorator limits access to eligible staff roles.
 
 Routes:
   GET  /admin/kyc              -> pending buyer verification queue
   POST /admin/kyc/<id>/decide  -> approve or reject one record
 """
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import Blueprint, render_template, request, redirect, url_for, flash, session
 
 from app.services import buyer_service
 from app.routes.admin_auth import require_admin
@@ -45,7 +34,7 @@ def decide(verification_id):
     result = buyer_service.admin_review_kyc(
         verification_id=verification_id,
         decision=decision,
-        reviewed_by=request.authorization.username or "admin",
+        reviewed_by=session.get("staff_username", "admin"),
         rejection_reason=reason,
     )
     if not result["ok"]:

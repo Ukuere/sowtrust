@@ -15,8 +15,8 @@ import re
 import secrets
 from app.models.database import get_db, fetchone, fetchall
 from app.utils.security import hash_password, verify_password
+from app.utils.phone import normalize_phone
 
-_PHONE_RE = re.compile(r"^\+?[0-9]{10,15}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 BUYER_TYPES = ["Individual", "Retailer", "Wholesaler", "Restaurant/Hospitality", "Processor", "Other"]
@@ -34,21 +34,44 @@ ID_TYPES = ["National ID (NIN)", "International Passport", "Driver's Licence", "
 BUSINESS_BUYER_TYPES = {"Retailer", "Wholesaler", "Restaurant/Hospitality", "Processor"}
 
 
-def normalize_phone(raw: str) -> str | None:
-    """
-    Accepts Nigerian local (0801...) or E.164 (+2348011112222) input,
-    returns E.164 or None if it doesn't look like a real phone number.
-    """
-    if not raw:
-        return None
-    cleaned = re.sub(r"[\s\-]", "", raw.strip())
-    if not _PHONE_RE.match(cleaned):
-        return None
-    if cleaned.startswith("+"):
-        return cleaned
-    if cleaned.startswith("0"):
-        return "+234" + cleaned[1:]
-    return "+" + cleaned
+def ensure_ussd_buyer(phone: str) -> dict:
+    """Persist a buyer as soon as they enter the USSD buyer portal."""
+    norm_phone = normalize_phone(phone)
+    if not norm_phone:
+        return {"ok": False, "error": "Africa's Talking did not supply a valid phone number."}
+    existing = fetchone(
+        "SELECT * FROM buyers WHERE normalized_phone=? OR phone=?",
+        (norm_phone, norm_phone),
+    )
+    created = not existing
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO buyers
+               (phone, normalized_phone, registration_channel,
+                verification_status, account_status, phone_verified,
+                kyc_status, is_active, created_at, updated_at)
+               VALUES (?, ?, 'USSD', 'UNVERIFIED', 'ACTIVE', 1,
+                       'REGISTERED', 1, datetime('now'), datetime('now'))
+               ON CONFLICT(phone) DO UPDATE SET
+                 normalized_phone=excluded.normalized_phone,
+                 phone_verified=1,
+                 updated_at=datetime('now')""",
+            (norm_phone, norm_phone),
+        )
+        buyer_id = conn.execute(
+            "SELECT id FROM buyers WHERE normalized_phone=?", (norm_phone,)
+        ).fetchone()[0]
+        if created:
+            conn.execute(
+                "INSERT INTO audit_log(actor, action, details) VALUES (?, 'BUYER_REGISTERED', 'CHANNEL:USSD')",
+                (norm_phone,),
+            )
+    from app.services import identity_service
+    linked = identity_service.ensure_user_role(
+        norm_phone, "BUYER", "", "USSD", True, buyer_id
+    )
+    return {"ok": linked["ok"], "phone": norm_phone,
+            "created": created, "error": linked.get("error")}
 
 
 def register_buyer(phone: str, password: str, name: str, email: str,
@@ -62,8 +85,8 @@ def register_buyer(phone: str, password: str, name: str, email: str,
     norm_phone = normalize_phone(phone)
     if not norm_phone:
         return {"ok": False, "error": "Enter a valid phone number, e.g. 08011112222."}
-    if not password or len(password) < 6:
-        return {"ok": False, "error": "Password must be at least 6 characters."}
+    if not password or len(password) < 8:
+        return {"ok": False, "error": "Password must be at least 8 characters."}
     if not name or len(name.strip()) < 2:
         return {"ok": False, "error": "Enter your full name."}
     if not email or not _EMAIL_RE.match(email.strip()):
@@ -77,9 +100,19 @@ def register_buyer(phone: str, password: str, name: str, email: str,
     if buyer_type not in BUYER_TYPES:
         return {"ok": False, "error": "Select a valid buyer type."}
 
-    existing = fetchone("SELECT password_hash FROM buyers WHERE phone = ?", (norm_phone,))
+    existing = fetchone(
+        "SELECT password_hash FROM buyers WHERE normalized_phone = ? OR phone = ?",
+        (norm_phone, norm_phone),
+    )
     if existing and existing["password_hash"]:
         return {"ok": False, "error": "An account with this phone number already exists. Log in instead."}
+    if existing:
+        return {
+            "ok": False,
+            "activation_required": True,
+            "phone": norm_phone,
+            "error": "Your SowTrust account already exists. Verify your phone number to access the portal.",
+        }
 
     existing_email = fetchone(
         "SELECT phone FROM buyers WHERE email = ? AND phone != ?", (email.strip(), norm_phone)
@@ -93,12 +126,16 @@ def register_buyer(phone: str, password: str, name: str, email: str,
     with get_db() as conn:
         conn.execute(
             """INSERT INTO buyers
-               (phone, name, business_name, email, password_hash,
+               (phone, normalized_phone, registration_channel, verification_status,
+                account_status, phone_verified,
+                name, business_name, email, password_hash,
                 delivery_address, city, state, buyer_type,
                 kyc_status, email_verified, email_verification_token,
                 email_verification_sent_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROFILE_COMPLETED', 0, ?, datetime('now'))
+               VALUES (?, ?, 'WEB', 'UNVERIFIED', 'ACTIVE', 0,
+                       ?, ?, ?, ?, ?, ?, ?, ?, 'PROFILE_COMPLETED', 0, ?, datetime('now'))
                ON CONFLICT(phone) DO UPDATE SET
+                 normalized_phone = excluded.normalized_phone,
                  name = excluded.name,
                  business_name = excluded.business_name,
                  email = excluded.email,
@@ -109,10 +146,20 @@ def register_buyer(phone: str, password: str, name: str, email: str,
                  buyer_type = excluded.buyer_type,
                  email_verification_token = excluded.email_verification_token,
                  email_verification_sent_at = excluded.email_verification_sent_at""",
-            (norm_phone, name.strip(), business_name.strip() or None, email.strip(), pw_hash,
+            (norm_phone, norm_phone, name.strip(), business_name.strip() or None, email.strip(), pw_hash,
              delivery_address.strip(), city.strip(), state.strip(), buyer_type,
              verification_token),
         )
+        buyer_id = conn.execute(
+            "SELECT id FROM buyers WHERE phone=?", (norm_phone,)
+        ).fetchone()[0]
+
+    from app.services import identity_service
+    linked = identity_service.ensure_user_role(
+        norm_phone, "BUYER", name, "WEB", False, buyer_id
+    )
+    if not linked["ok"]:
+        return linked
     return {"ok": True, "phone": norm_phone, "email": email.strip(),
             "verification_token": verification_token}
 
@@ -137,19 +184,89 @@ def authenticate_buyer(phone: str, password: str) -> dict:
     if not norm_phone:
         return {"ok": False, "error": "Enter a valid phone number."}
 
-    row = fetchone("SELECT * FROM buyers WHERE phone = ?", (norm_phone,))
-    if not row or not row["password_hash"]:
+    row = fetchone(
+        "SELECT * FROM buyers WHERE normalized_phone = ? OR phone = ?",
+        (norm_phone, norm_phone),
+    )
+    if row and not row["password_hash"]:
+        return {
+            "ok": False,
+            "activation_required": True,
+            "phone": norm_phone,
+            "error": "Your SowTrust account already exists. Verify your phone number to access the portal.",
+        }
+    if not row:
         return {"ok": False, "error": "No web account found for that phone number."}
     if not verify_password(password, row["password_hash"]):
         return {"ok": False, "error": "Incorrect password."}
     if not row["is_active"]:
         return {"ok": False, "error": "This account has been deactivated. Contact support."}
+    if not row["phone_verified"]:
+        return {
+            "ok": False,
+            "activation_required": True,
+            "phone": norm_phone,
+            "error": "Verify your phone number before signing in.",
+        }
 
-    return {"ok": True, "buyer": dict(row)}
+    from app.services import identity_service
+    identity_service.ensure_user_role(
+        norm_phone, "BUYER", row["name"] or "",
+        row["registration_channel"] or "LEGACY", True, row["id"],
+    )
+    return {"ok": True, "buyer": dict(row), "phone": norm_phone}
+
+
+def set_buyer_password(phone: str, password: str) -> dict:
+    """Attach web credentials after successful phone OTP activation."""
+    norm_phone = normalize_phone(phone)
+    if not norm_phone:
+        return {"ok": False, "error": "Enter a valid phone number."}
+    if not password or len(password) < 8:
+        return {"ok": False, "error": "Password must be at least 8 characters."}
+    row = fetchone(
+        "SELECT id FROM buyers WHERE normalized_phone=? OR phone=?",
+        (norm_phone, norm_phone),
+    )
+    if not row:
+        return {"ok": False, "error": "Buyer account not found."}
+    password_hash = hash_password(password)
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE buyers SET password_hash=?, phone_verified=1,
+                   updated_at=datetime('now') WHERE id=?""",
+            (password_hash, row["id"]),
+        )
+        conn.execute(
+            """UPDATE users SET password_hash=?, phone_verified=1,
+                   updated_at=datetime('now') WHERE normalized_phone=?""",
+            (password_hash, norm_phone),
+        )
+    return {"ok": True, "phone": norm_phone}
+
+
+def mark_phone_verified_for_test(phone: str) -> None:
+    """Test harness hook; production verification always uses a valid OTP."""
+    norm_phone = normalize_phone(phone)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE buyers SET phone_verified=1, updated_at=datetime('now') "
+            "WHERE normalized_phone=? OR phone=?",
+            (norm_phone, norm_phone),
+        )
+        conn.execute(
+            "UPDATE users SET phone_verified=1, updated_at=datetime('now') "
+            "WHERE normalized_phone=?",
+            (norm_phone,),
+        )
 
 
 def get_buyer(phone: str) -> dict | None:
-    row = fetchone("SELECT * FROM buyers WHERE phone = ?", (phone,))
+    normalized = normalize_phone(phone)
+    row = fetchone(
+        "SELECT * FROM buyers WHERE normalized_phone = ? OR phone = ?",
+        (normalized, normalized),
+    ) if normalized else None
     return dict(row) if row else None
 
 
@@ -196,7 +313,7 @@ def submit_kyc(phone: str, id_type: str, id_number: str, id_document_path: str,
     with get_db() as conn:
         conn.execute(
             """UPDATE buyers SET
-                 kyc_status = 'KYC_PENDING',
+                 kyc_status = 'KYC_PENDING', verification_status='PENDING',
                  id_type = ?, id_number = ?, id_document_path = ?,
                  business_reg_number = ?, business_reg_document_path = ?,
                  authorized_rep_name = ?, authorized_rep_id_number = ?,
@@ -259,8 +376,14 @@ def admin_review_kyc(verification_id: int, decision: str, reviewed_by: str,
         )
         conn.execute(
             """UPDATE buyers SET kyc_status = ?, kyc_reviewed_at = datetime('now'),
-                   kyc_rejection_reason = ?
+                   verification_status=?, kyc_rejection_reason = ?
                WHERE phone = ?""",
-            (decision, rejection_reason.strip() or None, record["user_id"]),
+            (decision, decision, rejection_reason.strip() or None, record["user_id"]),
+        )
+        conn.execute(
+            """UPDATE user_roles SET verification_status=?, updated_at=datetime('now')
+               WHERE role='BUYER' AND user_id=(
+                 SELECT id FROM users WHERE normalized_phone=?)""",
+            (decision, record["user_id"]),
         )
     return {"ok": True}

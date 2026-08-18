@@ -8,9 +8,10 @@ from functools import wraps
 
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
 
-from app.models.database import fetchone
-from app.services import document_storage, product_service
-from app.utils.security import verify_and_upgrade_pin
+from app.models.database import fetchone, get_db
+from app.services import document_storage, product_service, identity_service
+from app.utils.phone import normalize_phone
+from app.utils.security import hash_pin
 
 agent_web_bp = Blueprint(
     "agent_web", __name__, url_prefix="/agent", template_folder="templates"
@@ -26,16 +27,69 @@ def agent_login_required(view):
     return wrapped
 
 
+@agent_web_bp.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        phone = normalize_phone(request.form.get("phone", ""))
+        location = request.form.get("location", "").strip()
+        pin = request.form.get("pin", "").strip()
+        if len(name) < 2 or not phone or not location or len(pin) != 4 or not pin.isdigit():
+            flash("Enter your name, location, valid phone number, and a four-digit PIN.", "error")
+            return render_template("agent/register.html"), 400
+
+        existing = fetchone(
+            "SELECT id FROM agents WHERE normalized_phone=? OR phone=?",
+            (phone, phone),
+        )
+        if existing:
+            flash(
+                "Your SowTrust agent account already exists. Verify your phone number to access the portal.",
+                "success",
+            )
+            return redirect(url_for("account_activation.activate_agent", phone=phone))
+
+        with get_db() as conn:
+            cursor = conn.execute(
+                """INSERT INTO agents
+                   (name, phone, normalized_phone, registration_channel,
+                    verification_status, account_status, phone_verified,
+                    pin_hash, location, is_active, created_at, updated_at)
+                   VALUES (?, ?, ?, 'WEB', 'PENDING', 'ACTIVE', 0,
+                           ?, ?, 1, datetime('now'), datetime('now'))""",
+                (name, phone, phone, hash_pin(pin), location),
+            )
+            agent_id = cursor.lastrowid
+            conn.execute(
+                "INSERT INTO audit_log(actor, action, details) "
+                "VALUES (?, 'AGENT_REGISTERED', 'CHANNEL:WEB')",
+                (phone,),
+            )
+        identity_service.ensure_user_role(phone, "AGENT", name, "WEB", False, agent_id)
+        otp = identity_service.request_otp(
+            phone, "AGENT", "ACTIVATE",
+            request.remote_addr or "",
+        )
+        if not otp["ok"]:
+            flash(otp["error"], "error")
+            return redirect(url_for("account_activation.activate_agent", phone=phone))
+        session["activation_phone_AGENT"] = phone
+        flash(f"Account created. A verification code was sent to {otp['masked_phone']}.", "success")
+        return redirect(url_for("account_activation.activate_agent"))
+    return render_template("agent/register.html")
+
+
 @agent_web_bp.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         phone = request.form.get("phone", "").strip()
         pin = request.form.get("pin", "").strip()
-        agent = fetchone("SELECT * FROM agents WHERE phone=? AND is_active=1", (phone,))
-        if not agent or not verify_and_upgrade_pin("agents", phone, pin, agent["pin_hash"]):
-            flash("Invalid agent phone or PIN.", "error")
+        result = identity_service.authenticate_role_pin(phone, "AGENT", pin)
+        if not result["ok"]:
+            flash(result["error"], "error")
             return render_template("agent/login.html"), 400
-        session["agent_phone"] = phone
+        session["agent_phone"] = result["phone"]
+        session.permanent = True
         return redirect(request.args.get("next") or url_for("agent_web.dashboard"))
     return render_template("agent/login.html")
 
@@ -58,10 +112,13 @@ def dashboard():
 @agent_login_required
 def new_listing():
     if request.method == "POST":
-        image = document_storage.save_product_image(request.files.get("product_image"))
-        if not image["ok"]:
-            flash(image["error"], "error")
-            return render_template("agent/new_listing.html", form=request.form), 400
+        upload = request.files.get("product_image")
+        image = {"ok": True, "path": None}
+        if upload and upload.filename:
+            image = document_storage.save_product_image(upload)
+            if not image["ok"]:
+                flash(image["error"], "error")
+                return render_template("agent/new_listing.html", form=request.form), 400
 
         try:
             price = float(request.form.get("price", "0").replace(",", ""))
@@ -86,7 +143,7 @@ def new_listing():
             flash(result["error"], "error")
             return render_template("agent/new_listing.html", form=request.form), 400
 
-        flash("Product listing submitted for admin review.", "success")
+        flash("Product listing published. Operations can verify or update it later.", "success")
         return redirect(url_for("agent_web.dashboard"))
 
     return render_template("agent/new_listing.html", form={})

@@ -4,6 +4,7 @@
 <div class="card">
   <h1>Create your buyer account</h1>
   <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <label>Full name</label>
     <input type="text" name="name" value="{{ form.get('name','') }}" required>
 
@@ -34,12 +35,13 @@
     <input type="text" name="state" value="{{ form.get('state','') }}" required>
 
     <label>Password</label>
-    <input type="password" name="password" minlength="6" required>
+    <input type="password" name="password" minlength="8" autocomplete="new-password" required>
 
     <button type="submit">Create account</button>
   </form>
   <p class="muted" style="margin-top:14px;">
     Already have an account? <a class="plain" href="{{ url_for('buyer_web.login') }}">Log in</a>
   </p>
+  <p class="muted">Registered through USSD? <a class="plain" href="{{ url_for('account_activation.activate_buyer') }}">Activate your existing account</a>.</p>
 </div>
 {% endblock %}

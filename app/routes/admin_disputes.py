@@ -1,7 +1,7 @@
 """
 Admin dispute review queue.
 """
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, flash, redirect, render_template, request, session, url_for
 
 from app.routes.admin_auth import require_admin
 from app.services import dispute_service
@@ -25,7 +25,7 @@ def resolve(dispute_id):
         dispute_id=dispute_id,
         resolution_status=request.form.get("resolution_status", ""),
         resolution=request.form.get("resolution", ""),
-        resolved_by=request.authorization.username or "admin",
+        resolved_by=session.get("staff_username", "admin"),
     )
     if not result["ok"]:
         flash(result["error"], "error")

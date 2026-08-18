@@ -5,6 +5,7 @@
 <h1>Submit product listing</h1>
 <div class="card">
   <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <label>Verified farmer phone</label>
     <input name="farmer_phone" value="{{ form.farmer_phone or '' }}" required>
 
@@ -24,7 +25,8 @@
     <textarea name="description" placeholder="Grade, harvest date, moisture level, packaging, or other useful buyer details">{{ form.description or '' }}</textarea>
 
     <label>Product image</label>
-    <input name="product_image" type="file" accept="image/png,image/jpeg" required>
+    <input name="product_image" type="file" accept="image/png,image/jpeg">
+    <small>Optional. SowTrust displays a safe placeholder until an authorized agent or administrator adds the real image.</small>
 
     <button type="submit">Submit for review</button>
   </form>

@@ -1,0 +1,18 @@
+{% extends "public/base.html" %}
+{% block title %}Operations | SowTrust{% endblock %}
+{% block content %}
+<div class="content">
+  <h1>SowTrust Operations</h1>
+  <p>Signed in as {{ session.staff_username }} ({{ session.staff_role }}).</p>
+  <div class="role-grid">
+    <article class="role-card"><h3>KYC review</h3><p>Review buyer and identity submissions.</p><div class="links"><a href="{{ url_for('admin_kyc.queue') }}">Open KYC queue</a></div></article>
+    <article class="role-card"><h3>Logistics</h3><p>Review providers and lock buyer-visible delivery quotes.</p><div class="links"><a href="{{ url_for('admin_logistics.queue') }}">Open logistics queue</a></div></article>
+    <article class="role-card"><h3>Listings</h3><p>Verify, suspend or restore published product listings.</p><div class="links"><a href="{{ url_for('admin_products.queue') }}">Open listing moderation</a></div></article>
+    <article class="role-card"><h3>Disputes and audit</h3><p>Resolve active disputes and inspect sensitive operations.</p><div class="links"><a href="{{ url_for('admin_disputes.queue') }}">Open disputes</a><a href="{{ url_for('admin_audit.dashboard') }}">View audit log</a></div></article>
+    <article class="role-card"><h3>Users</h3><p>Review unified identities, roles, channels and account states.</p><div class="links"><a href="{{ url_for('admin_operations.users') }}">Open user directory</a></div></article>
+    <article class="role-card"><h3>Payments and escrow</h3><p>Inspect payment confirmation, payout and escrow records.</p><div class="links"><a href="{{ url_for('admin_operations.payments') }}">Payments</a><a href="{{ url_for('admin_operations.escrow') }}">Escrow</a></div></article>
+    <article class="role-card"><h3>CEO console</h3><p>Open the protected operations analytics service.</p><div class="links"><a href="{{ url_for('admin_operations.ceo_console') }}">Open console</a></div></article>
+  </div>
+  <form method="post" action="{{ url_for('staff_auth.logout') }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="button outline" type="submit">Log out</button></form>
+</div>
+{% endblock %}

@@ -1,15 +1,13 @@
 """
 Sowtrust Global — USSD Route Handler v6.1
 =========================================
-KEY FIX (v6.1):
-  Buyer portal no longer asks for a farmer phone number.
-  Instead, the system shows a LIVE NUMBERED LISTING of
-  verified farmers selling the chosen crop. The buyer
-  simply picks a number (1-5). The phone number match
-  happens internally — the buyer never needs to know it.
+Buyer portal shows a live numbered list of published products. Seller
+verification remains visible as a separate trust signal; it does not hide
+an otherwise valid listing.
 
-  New Buyer Flow:
-    *709# > 2 > 1 > [crop] > [pick farmer #] > [qty] > confirm > LOCKED
+  Buyer Flow:
+    *709# > 2 > 1 > [crop] > [seller] > [qty] > [address] > quote request
+    Operations locks quote > buyer accepts quote > payment initializes
 
 All portals: Farmer, Buyer, Logistics, Wallet, Withdraw, Agent.
 """
@@ -21,7 +19,7 @@ from app.utils.security import (
     get_session, set_session, clear_session
 )
 from app.services.escrow_service import (
-    initiate_escrow_payment, release_escrow,
+    create_order_awaiting_quote, initiate_payment_for_order, release_escrow,
     get_active_escrow, get_farmer_history
 )
 from app.services.payment_service import (
@@ -30,12 +28,15 @@ from app.services.payment_service import (
 from app.services.fee_service import calculate_full_order
 from app.services.logistics_service import (
     register_provider, get_provider, get_available_jobs, assign_provider,
-    confirm_delivery, save_provider_bank_account, commit_provider_bank_account
+    confirm_delivery, save_provider_bank_account, commit_provider_bank_account,
+    create_quote_request, get_quote_for_order, accept_locked_quote,
 )
 from app.services.sms_service import send_sms, notify_logistics
 from app.services.product_service import (
     get_or_create_product, list_active_products, find_farmers_for_product
 )
+from app.services import buyer_service, identity_service, notification_service
+from app.utils.phone import normalize_phone
 from config.settings import config
 
 ussd_bp = Blueprint("ussd", __name__)
@@ -43,10 +44,18 @@ ussd_bp = Blueprint("ussd", __name__)
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 def _farmer(phone):
-    return fetchone("SELECT * FROM farmers WHERE phone=? AND is_active=1", (phone,))
+    return fetchone(
+        """SELECT * FROM farmers
+           WHERE (normalized_phone=? OR phone=?) AND is_active=1""",
+        (phone, phone),
+    )
 
 def _agent(phone):
-    return fetchone("SELECT * FROM agents WHERE phone=? AND is_active=1", (phone,))
+    return fetchone(
+        """SELECT * FROM agents
+           WHERE (normalized_phone=? OR phone=?) AND is_active=1""",
+        (phone, phone),
+    )
 
 def CON(msg): return f"CON {msg}"
 def END(msg): return f"END {msg}"
@@ -56,7 +65,10 @@ def END(msg): return f"END {msg}"
 @ussd_bp.route("/ussd", methods=["POST"])
 def ussd_handler():
     text  = request.values.get("text", "").strip()
-    phone = request.values.get("phoneNumber", "").strip()
+    raw_phone = request.values.get("phoneNumber", "").strip()
+    phone = normalize_phone(raw_phone)
+    if not phone:
+        return END("We could not verify your phone number. Please contact SowTrust support.")
     steps = text.split("*") if text else []
     level = len(steps)
 
@@ -123,13 +135,24 @@ def ussd_handler():
                 try:
                     with get_db() as conn:
                         conn.execute(
-                            "INSERT INTO farmers (name,phone,crop,location,pin_hash) VALUES (?,?,?,?,?)",
-                            (name.title(), phone, crop, loc.title(), hash_pin(pin))
+                            """INSERT INTO farmers
+                               (name, phone, normalized_phone, registration_channel,
+                                verification_status, account_status, phone_verified,
+                                crop, location, pin_hash, listing_status)
+                               VALUES (?, ?, ?, 'USSD', 'UNVERIFIED', 'ACTIVE', 1,
+                                       ?, ?, ?, 'DRAFT')""",
+                            (name.title(), phone, phone, crop, loc.title(), hash_pin(pin))
                         )
+                        farmer_id = conn.execute(
+                            "SELECT id FROM farmers WHERE normalized_phone=?", (phone,)
+                        ).fetchone()[0]
                         conn.execute(
                             "INSERT INTO audit_log(actor,action,details) VALUES(?,?,?)",
                             (phone, "FARMER_REGISTERED", f"Crop:{crop}")
                         )
+                    identity_service.ensure_user_role(
+                        phone, "FARMER", name.title(), "USSD", True, farmer_id
+                    )
                     send_sms(phone,
                         f"Welcome to Sowtrust, {name.title()}!\n"
                         f"Account active. Dial *709# > 1 > 2\n"
@@ -163,17 +186,21 @@ def ussd_handler():
                 with get_db() as conn:
                     conn.execute(
                         """UPDATE farmers
-                           SET price=?, listing_status=CASE
-                                 WHEN product_image_path IS NULL OR product_image_path='' THEN 'DRAFT'
-                                 ELSE 'PENDING_REVIEW'
-                               END,
+                           SET price=?, listing_status='PUBLISHED',
+                               verification_status=CASE
+                                 WHEN verification_status='VERIFIED' THEN 'VERIFIED'
+                                 ELSE 'PENDING' END,
+                               listing_published_at=COALESCE(listing_published_at, datetime('now')),
                                listing_updated_at=datetime('now')
-                           WHERE phone=?""",
-                        (price, phone),
+                           WHERE normalized_phone=? OR phone=?""",
+                        (price, phone, phone),
                     )
+                farmer = _farmer(phone)
+                notification_service.notify_new_product_listing(dict(farmer))
                 return END(
                     f"Price updated to NGN {price:,.0f}/bag.\n"
-                    f"An agent must confirm product media before buyers see the listing."
+                    f"Your listing is now visible to buyers.\n"
+                    f"An agent can add a real product photo later."
                 )
 
         # 1.3 Release Escrow
@@ -233,8 +260,8 @@ def ussd_handler():
     #  OLD (broken): Buyer had to type farmer's phone number manually.
     #                Buyer and farmer don't know each other → impossible.
     #
-    #  NEW (fixed):  Buyer picks a CROP. System fetches all VERIFIED
-    #                farmers listing that crop from the database and
+    #  NEW (fixed):  Buyer picks a CROP. System fetches all PUBLISHED
+    #                farmer listings for that crop from the database and
     #                shows them as a numbered menu:
     #
     #                  1. Emeka | Ogun State | NGN150,000/bag
@@ -246,19 +273,24 @@ def ussd_handler():
     #                Buyer NEVER types a phone number. Ever.
     #
     #  Step map:
-    #    level 2 → select crop
-    #    level 3 → show farmer listing; buyer picks a number
-    #    level 4 → enter quantity (bags)
-    #    level 5 → show full summary; confirm or cancel
-    #    level 6 → lock escrow, send SMS to both parties
+    #    level 2 -> select crop
+    #    level 3 -> show farmer listing; buyer picks a number
+    #    level 4 -> enter quantity (bags)
+    #    level 5 -> enter delivery address
+    #    level 6 -> review quote request
+    #    level 7 -> create order; Operations quotes before payment
     # ══════════════════════════════════════════════════════════════════════
     elif choice == "2":
+        buyer_account = buyer_service.ensure_ussd_buyer(phone)
+        if not buyer_account["ok"]:
+            return END(buyer_account["error"] or "Could not open your buyer account.")
         if level == 1:
             return CON(
                 "Buyer Portal\n"
                 "1. Browse & Buy (Escrow)\n"
                 "2. Post Crop Request\n"
-                "3. My Orders"
+                "3. My Orders\n"
+                "4. Accept Quote & Pay"
             )
 
         sub = steps[1]
@@ -290,7 +322,7 @@ def ussd_handler():
                 )
 
             # Step 3 — resolve their answer (menu number OR typed name)
-            # to a product, then show verified sellers for it.
+            # to a product, then show published sellers for it.
             if level == 3:
                 sess = get_session(phone)
                 product_map = sess.get("products", {})
@@ -303,7 +335,7 @@ def ussd_handler():
                 rows, matched_crop = find_farmers_for_product(crop, limit=5)
                 if not rows:
                     return END(
-                        f"No verified sellers for '{crop}' right now.\n"
+                        f"No published sellers for '{crop}' right now.\n"
                         f"Dial *709# > 2 > 2 to post a request —\n"
                         f"an agent will match you within 24hrs."
                     )
@@ -322,7 +354,7 @@ def ussd_handler():
                     for i, r in enumerate(rows)
                 ]
                 return CON(
-                    f"Verified {crop} Sellers:\n"
+                    f"Published {crop} Sellers:\n"
                     + "\n".join(lines)
                     + "\n\nEnter number to select:"
                 )
@@ -354,7 +386,7 @@ def ussd_handler():
                     f"Enter quantity (bags):"
                 )
 
-            # Step 5 — calculate total and show escrow summary
+            # Step 5 — quantity, then collect the delivery destination.
             if level == 5:
                 sess = get_session(phone)
                 if not sess or "chosen" not in sess:
@@ -372,51 +404,68 @@ def ussd_handler():
                 sess.update({"qty": qty, "total": product_amount, "fees": fees})
                 set_session(phone, sess)
 
-                return CON(
-                    f"-- Escrow Summary --\n"
-                    f"Crop:    {sess['crop']}\n"
-                    f"Farmer:  {chosen['name']}\n"
-                    f"Bags:    {qty}\n"
-                    f"Goods:   NGN {fees['product_amount']:,.0f}\n"
-                    f"Fee:     NGN {fees['buyer_platform_fee']:,.0f} (buyer fee)\n"
-                    f"TOTAL:   NGN {fees['buyer_total']:,.0f}\n"
-                    f"──────────────────\n"
-                    f"1. Confirm & Lock\n"
-                    f"2. Cancel"
-                )
+                return CON("Enter delivery address / town:")
 
-            # Step 6 — confirmed; initiate REAL payment (not an instant lock)
+            # Step 6 — show product subtotal and request quote creation.
             if level == 6:
                 sess = get_session(phone)
                 if not sess or "chosen" not in sess:
                     return END("Session expired. Dial *709# to start again.")
+                destination = steps[5].strip()
+                if len(destination) < 3:
+                    return END("Enter a valid delivery address or town.")
+                sess["destination"] = destination
+                set_session(phone, sess)
+                fees = sess["fees"]
 
-                if steps[5] != "1":
+                return CON(
+                    f"-- Quote Request --\n"
+                    f"Crop:    {sess['crop']}\n"
+                    f"Farmer:  {sess['chosen']['name']}\n"
+                    f"Bags:    {sess['qty']}\n"
+                    f"Goods:   NGN {fees['product_amount']:,.0f}\n"
+                    f"Fee:     NGN {fees['buyer_platform_fee']:,.0f} (buyer fee)\n"
+                    f"Delivery: quoted by Operations\n"
+                    f"You will approve the FINAL total before payment.\n"
+                    f"1. Request Quote\n"
+                    f"2. Cancel"
+                )
+
+            # Step 7 — create order and logistics quote request. No Paystack call.
+            if level == 7:
+                sess = get_session(phone)
+                if not sess or "chosen" not in sess:
+                    return END("Session expired. Dial *709# to start again.")
+
+                if steps[6] != "1":
                     clear_session(phone)
                     return END("Cancelled. Dial *709# whenever you are ready.")
 
                 chosen = sess["chosen"]
-                result = initiate_escrow_payment(
+                result = create_order_awaiting_quote(
                     buyer_phone    = phone,
                     farmer_phone   = chosen["phone"],
                     crop           = sess["crop"],
                     quantity_bags  = sess["qty"],
-                    product_amount = sess["total"]
+                    product_amount = sess["total"],
+                    delivery_address = sess["destination"],
+                )
+                if not result["ok"]:
+                    clear_session(phone)
+                    return END(f"Could not create order: {result['error']}")
+                quote = create_quote_request(
+                    result["txn_id"], chosen["location"], sess["destination"],
+                    requested_by="buyer_ussd",
                 )
                 clear_session(phone)
-
-                if result["ok"]:
+                if not quote["ok"]:
                     return END(
-                        f"Almost done! Transfer NGN {result['buyer_total']:,.0f} to:\n"
-                        f"Acct: {result['account_number']}\n"
-                        f"Bank: {result['bank_name']}\n\n"
-                        f"TXN: {result['txn_id']}\n"
-                        f"Your produce is reserved once payment lands.\n"
-                        f"You'll get an SMS confirming escrow is locked."
+                        f"Order {result['txn_id']} was created, but Operations must repair its quote request."
                     )
                 return END(
-                    f"Could not start payment: {result['error']}\n"
-                    f"Dial *709# to try again."
+                    f"Quote requested! TXN: {result['txn_id']}\n"
+                    f"SowTrust Operations will confirm delivery cost.\n"
+                    f"Dial *709# > 2 > 4 later to review the final total and pay."
                 )
 
         # ──────────────────────────────────────────────────────────────────
@@ -477,6 +526,64 @@ def ussd_handler():
             ]
             return END("Your Recent Orders:\n" + "\n".join(lines))
 
+        # 2.4 Explicitly accept a locked logistics quote before Paystack.
+        elif sub == "4":
+            if level == 2:
+                rows = fetchall(
+                    """SELECT e.txn_id, e.crop, e.buyer_total,
+                              q.quoted_amount, q.expires_at
+                       FROM escrow_ledger e
+                       JOIN logistics_quotes q ON q.order_id=e.txn_id
+                       WHERE e.buyer_phone=? AND e.status='QUOTE_READY'
+                         AND q.status='LOCKED'
+                         AND (q.expires_at IS NULL OR q.expires_at > datetime('now'))
+                       ORDER BY q.locked_at DESC LIMIT 5""",
+                    (phone,),
+                )
+                if not rows:
+                    return END("No quote is ready yet. SowTrust will notify you when Operations locks one.")
+                order_map = {str(i + 1): dict(row) for i, row in enumerate(rows)}
+                set_session(phone, {"quote_orders": order_map})
+                lines = [
+                    f"{i+1}. {row['crop']} | Total NGN{row['buyer_total']:,.0f}"
+                    for i, row in enumerate(rows)
+                ]
+                return CON("Quotes ready:\n" + "\n".join(lines) + "\nSelect an order:")
+            if level == 3:
+                order = (get_session(phone).get("quote_orders") or {}).get(steps[2])
+                if not order:
+                    return END("Invalid selection. Dial *709# to retry.")
+                set_session(phone, {"selected_quote_order": order})
+                return CON(
+                    f"TXN: {order['txn_id']}\n"
+                    f"Product: {order['crop']}\n"
+                    f"Logistics: NGN {order['quoted_amount']:,.0f}\n"
+                    f"FINAL TOTAL: NGN {order['buyer_total']:,.0f}\n"
+                    f"1. Accept & Initialize Payment\n2. Cancel"
+                )
+            if level == 4:
+                sess = get_session(phone)
+                order = sess.get("selected_quote_order") if sess else None
+                if not order:
+                    return END("Session expired. Dial *709# to start again.")
+                if steps[3] != "1":
+                    clear_session(phone)
+                    return END("Cancelled. Your quote was not changed.")
+                accepted = accept_locked_quote(order["txn_id"], phone)
+                if not accepted["ok"]:
+                    clear_session(phone)
+                    return END(f"Could not accept quote: {accepted['error']}")
+                payment = initiate_payment_for_order(order["txn_id"], phone)
+                clear_session(phone)
+                if not payment["ok"]:
+                    return END(f"Quote accepted, but payment setup failed: {payment['error']}")
+                return END(
+                    f"Transfer exactly NGN {payment['buyer_total']:,.0f} to:\n"
+                    f"Acct: {payment['account_number']}\n"
+                    f"Bank: {payment['bank_name']}\n"
+                    f"TXN: {payment['txn_id']}"
+                )
+
     # ══════════════════════════════════════════════════════════════════════
     #  PORTAL 3 — LOGISTICS
     # ══════════════════════════════════════════════════════════════════════
@@ -523,7 +630,7 @@ def ussd_handler():
                     return END("PINs do not match. Dial *709# to retry.")
                 result = register_provider(
                     phone=phone, name=steps[2], operating_area=steps[3],
-                    vehicle_type=steps[4], pin=steps[5]
+                    vehicle_type=steps[4], pin=steps[5], registration_channel="USSD"
                 )
                 if not result["ok"]:
                     return END(result["error"])
@@ -821,13 +928,29 @@ def ussd_handler():
                 name     = steps[2]
                 location = steps[3]
                 pin      = steps[4]
+                if len(pin) != 4 or not pin.isdigit():
+                    return END("PIN must be exactly 4 digits.")
                 if _agent(phone):
                     return END("Agent account already exists.")
                 with get_db() as conn:
                     conn.execute(
-                        "INSERT INTO agents (name,phone,pin_hash,location) VALUES (?,?,?,?)",
-                        (name.title(), phone, hash_pin(pin), location.title())
+                        """INSERT INTO agents
+                           (name, phone, normalized_phone, registration_channel,
+                            verification_status, account_status, phone_verified,
+                            pin_hash, location)
+                           VALUES (?, ?, ?, 'USSD', 'UNVERIFIED', 'ACTIVE', 1, ?, ?)""",
+                        (name.title(), phone, phone, hash_pin(pin), location.title())
                     )
+                    agent_id = conn.execute(
+                        "SELECT id FROM agents WHERE normalized_phone=?", (phone,)
+                    ).fetchone()[0]
+                    conn.execute(
+                        "INSERT INTO audit_log(actor, action, details) VALUES (?, 'AGENT_REGISTERED', 'CHANNEL:USSD')",
+                        (phone,),
+                    )
+                identity_service.ensure_user_role(
+                    phone, "AGENT", name.title(), "USSD", True, agent_id
+                )
                 send_sms(
                     phone,
                     f"Welcome Agent {name.title()}!\n"
@@ -849,9 +972,12 @@ def ussd_handler():
                     return END("Invalid Agent PIN.")
                 return CON("Enter Farmer Phone Number to Verify:")
             if level == 4:
-                farmer_phone = steps[3].strip()
+                farmer_phone = normalize_phone(steps[3])
+                if not farmer_phone:
+                    return END("Enter a valid farmer phone number.")
                 farmer = fetchone(
-                    "SELECT * FROM farmers WHERE phone=?", (farmer_phone,)
+                    "SELECT * FROM farmers WHERE normalized_phone=? OR phone=?",
+                    (farmer_phone, farmer_phone),
                 )
                 if not farmer:
                     return END(
@@ -860,8 +986,11 @@ def ussd_handler():
                     )
                 with get_db() as conn:
                     conn.execute(
-                        "UPDATE farmers SET kyc_status='VERIFIED' WHERE phone=?",
-                        (farmer_phone,)
+                        """UPDATE farmers
+                           SET kyc_status='VERIFIED', verification_status='VERIFIED',
+                               updated_at=datetime('now')
+                           WHERE id=?""",
+                        (farmer["id"],)
                     )
                     conn.execute(
                         "UPDATE agents SET recruits = recruits + 1 WHERE phone=?",
@@ -905,9 +1034,13 @@ def ussd_handler():
                     return END("Invalid Agent PIN.")
                 return CON("Enter Provider Phone Number to Verify:")
             if level == 4:
-                provider_phone = steps[3].strip()
+                provider_phone = normalize_phone(steps[3])
+                if not provider_phone:
+                    return END("Enter a valid provider phone number.")
                 provider = fetchone(
-                    "SELECT * FROM logistics_providers WHERE phone=?", (provider_phone,)
+                    """SELECT * FROM logistics_providers
+                       WHERE normalized_phone=? OR phone=?""",
+                    (provider_phone, provider_phone),
                 )
                 if not provider:
                     return END(
@@ -916,8 +1049,10 @@ def ussd_handler():
                     )
                 with get_db() as conn:
                     conn.execute(
-                        "UPDATE logistics_providers SET kyc_status='VERIFIED' WHERE phone=?",
-                        (provider_phone,)
+                        """UPDATE logistics_providers
+                           SET kyc_status='VERIFIED', verification_status='VERIFIED',
+                               updated_at=datetime('now') WHERE id=?""",
+                        (provider["id"],)
                     )
                     conn.execute(
                         "INSERT INTO audit_log(actor,action,details) VALUES(?,?,?)",

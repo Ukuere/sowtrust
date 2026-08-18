@@ -50,6 +50,7 @@
       <div class="row"><span>Reason</span><span>{{ d.reason }}</span></div>
       {% if d.details %}<p>{{ d.details }}</p>{% endif %}
       <form method="post" action="{{ url_for('admin_disputes.resolve', dispute_id=d.dispute_id) }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <label>Resolution status</label>
         <select name="resolution_status" required>
           <option value="RESOLVED_SELLER">Resolve: continue escrow</option>

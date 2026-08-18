@@ -78,6 +78,20 @@ def create_order_awaiting_quote(buyer_phone: str, farmer_phone: str,
             ).fetchone()
             txn_id = row["txn_id"]
             conn.execute(
+                """UPDATE escrow_ledger SET
+                     product_amount_kobo=?, buyer_platform_fee_kobo=?,
+                     seller_platform_fee_kobo=?, logistics_amount_kobo=0,
+                     logistics_platform_fee_kobo=0, buyer_total_kobo=?,
+                     farmer_settlement_amount_kobo=?,
+                     logistics_settlement_amount_kobo=0,
+                     sowtrust_total_revenue_kobo=?
+                   WHERE txn_id=?""",
+                (fees["product_amount_kobo"], fees["buyer_platform_fee_kobo"],
+                 fees["seller_platform_fee_kobo"], fees["buyer_total_kobo"],
+                 fees["farmer_settlement_amount_kobo"],
+                 fees["sowtrust_total_revenue_kobo"], txn_id),
+            )
+            conn.execute(
                 "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
                 (buyer_phone, "LOGISTICS_QUOTE_REQUESTED",
                  f"TXN:{txn_id} PRODUCT:{crop} QTY:{quantity_bags}"),
@@ -100,7 +114,7 @@ def initiate_payment_for_order(txn_id: str, buyer_phone: str) -> dict:
     )
     if not row:
         return {"ok": False, "error": "Order not found."}
-    if row["status"] == "PENDING_PAYMENT" and row["payment_reference"]:
+    if row["status"] == "PAYMENT_INITIALIZED" and row["payment_reference"]:
         return {
             "ok": True,
             "txn_id": row["txn_id"],
@@ -120,22 +134,38 @@ def initiate_payment_for_order(txn_id: str, buyer_phone: str) -> dict:
     if not quote or not quote["buyer_accepted_at"]:
         return {"ok": False, "error": "A locked, buyer-accepted logistics quote is required before payment."}
 
+    with get_db() as conn:
+        changed = conn.execute(
+            """UPDATE escrow_ledger SET status='PENDING_PAYMENT'
+               WHERE txn_id=? AND status='BUYER_ACCEPTED_QUOTE'
+                 AND payment_reference IS NULL""",
+            (txn_id,),
+        ).rowcount
+    if not changed:
+        return {"ok": False, "error": "Payment initialization is already in progress."}
+
     reference = _ref("PAY")
     pseudo_email = f"{buyer_phone.lstrip('+')}@sowtrust.com"
     charge = payment_service.initiate_bank_transfer_charge(
         pseudo_email, row["buyer_total"], reference
     )
     if not charge["ok"]:
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE escrow_ledger SET status='BUYER_ACCEPTED_QUOTE'
+                   WHERE txn_id=? AND status='PENDING_PAYMENT'
+                     AND payment_reference IS NULL""", (txn_id,),
+            )
         return {"ok": False, "error": charge["error"]}
 
     with get_db() as conn:
         conn.execute(
             """UPDATE escrow_ledger
-               SET status='PENDING_PAYMENT',
+               SET status='PAYMENT_INITIALIZED',
                    payment_reference=?,
                    virtual_account_number=?,
                    virtual_account_bank=?
-               WHERE txn_id=? AND status='BUYER_ACCEPTED_QUOTE'""",
+               WHERE txn_id=? AND status='PENDING_PAYMENT'""",
             (reference, charge["account_number"], charge["bank_name"], txn_id),
         )
         conn.execute(
@@ -158,86 +188,19 @@ def initiate_payment_for_order(txn_id: str, buyer_phone: str) -> dict:
 def initiate_escrow_payment(buyer_phone: str, farmer_phone: str,
                              crop: str, quantity_bags: int, product_amount: float,
                              logistics_amount: float = 0.0) -> dict:
+    """Compatibility guard for callers from older deployments.
+
+    Payment creation must use ``create_order_awaiting_quote`` followed by
+    buyer acceptance and ``initiate_payment_for_order``.
     """
-    Buyer confirmed an order. We do NOT lock escrow yet — we generate a
-    real one-time account for them to pay into first. Escrow only
-    becomes real once Paystack confirms the money actually arrived
-    (see confirm_payment_received, called from the webhook).
-
-    Three-sided fee model: the buyer is charged product_amount +
-    buyer_platform_fee (+ logistics_amount, once wired in) — NOT just
-    the raw product_amount. See fee_service.calculate_full_order().
-    """
-    if logistics_amount:
-        return {
-            "ok": False,
-            "error": "Logistics amount must come from a locked buyer-accepted quote before payment.",
-        }
-
-    fees = fee_service.calculate_full_order(product_amount, logistics_amount)
-    buyer_total = fees["buyer_total"]
-
-    reference = _ref("PAY")
-    # USSD has no email field — Paystack just needs a unique identifier here.
-    # Paystack validates email format strictly — ".ussd" isn't a real TLD
-    # and gets rejected. Use a real, valid-format domain instead (this
-    # email is never actually sent anything for the bank_transfer channel,
-    # it's just an identifier Paystack's API requires).
-    pseudo_email = f"{buyer_phone.lstrip('+')}@sowtrust.com"
-
-    charge = payment_service.initiate_bank_transfer_charge(pseudo_email, buyer_total, reference)
-    if not charge["ok"]:
-        return {"ok": False, "error": charge["error"]}
-
-    try:
-        with get_db() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO buyers (phone) VALUES (?)", (buyer_phone,)
-            )
-            conn.execute(
-                """INSERT INTO escrow_ledger
-                   (farmer_phone, buyer_phone, crop, quantity_bags,
-                    amount, service_fee,
-                    product_amount, buyer_platform_fee, seller_platform_fee,
-                    logistics_amount, logistics_platform_fee,
-                    buyer_total, farmer_settlement_amount,
-                    logistics_settlement_amount, sowtrust_total_revenue,
-                    release_code_hash, status, payment_reference,
-                    virtual_account_number, virtual_account_bank)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_PAYMENT', ?, ?, ?)""",
-                (farmer_phone, buyer_phone, crop, quantity_bags,
-                 # legacy columns, kept in sync for backward compatibility
-                 fees["product_amount"], fees["seller_platform_fee"],
-                 # new split fields
-                 fees["product_amount"], fees["buyer_platform_fee"], fees["seller_platform_fee"],
-                 fees["logistics_amount"], fees["logistics_platform_fee"],
-                 fees["buyer_total"], fees["farmer_settlement_amount"],
-                 fees["logistics_settlement_amount"], fees["sowtrust_total_revenue"],
-                 "",  # release code generated only once payment is confirmed
-                 reference, charge["account_number"], charge["bank_name"]),
-            )
-            row = conn.execute(
-                "SELECT txn_id FROM escrow_ledger WHERE payment_reference = ?", (reference,)
-            ).fetchone()
-            txn_id = row["txn_id"]
-            conn.execute(
-                "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
-                (buyer_phone, "PAYMENT_INITIATED",
-                 f"TXN:{txn_id} REF:{reference} BUYER_TOTAL:{buyer_total} "
-                 f"PRODUCT:{fees['product_amount']} BUYER_FEE:{fees['buyer_platform_fee']} "
-                 f"SELLER_FEE:{fees['seller_platform_fee']}"),
-            )
-
-        return {
-            "ok": True, "txn_id": txn_id, "buyer_total": buyer_total,
-            "account_number": charge["account_number"],
-            "bank_name": charge["bank_name"],
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    return {
+        "ok": False,
+        "error": "A locked, buyer-accepted logistics quote is required before payment initialization.",
+    }
 
 
-def confirm_payment_received(payment_reference: str, amount_paid: float) -> dict:
+def confirm_payment_received(payment_reference: str, amount_paid: float | None = None,
+                             amount_paid_kobo: int | None = None) -> dict:
     """
     [Called from Paystack webhook ONLY — this is the real money-received event.]
     Transitions PENDING_PAYMENT -> ESCROW_LOCKED and generates the release
@@ -248,17 +211,26 @@ def confirm_payment_received(payment_reference: str, amount_paid: float) -> dict
     )
     if not row:
         return {"ok": False, "error": "Unknown payment reference"}
-    if row["status"] != "PENDING_PAYMENT":
+    if row["status"] != "PAYMENT_INITIALIZED":
         return {"ok": True, "note": f"Already {row['status']}, ignoring duplicate webhook"}
 
-    if amount_paid < row["buyer_total"] - 1:  # tolerate rounding, not underpayment
-        # Underpaid — do not lock escrow. Flag for manual review rather than
-        # silently accepting a short payment.
+    expected_kobo = row["buyer_total_kobo"]
+    if expected_kobo is None:
+        expected_kobo = fee_service.to_kobo(row["buyer_total"])
+    paid_kobo = amount_paid_kobo
+    if paid_kobo is None and amount_paid is not None:
+        paid_kobo = fee_service.to_kobo(amount_paid)
+    if paid_kobo != expected_kobo:
         with get_db() as conn:
             conn.execute(
-                "UPDATE escrow_ledger SET status='DISPUTED' WHERE txn_id=?", (row["txn_id"],)
+                """UPDATE escrow_ledger SET status='DISPUTED', amount_paid_kobo=?
+                   WHERE txn_id=?""", (paid_kobo, row["txn_id"]),
             )
-        return {"ok": False, "error": f"Underpaid: expected {row['buyer_total']}, got {amount_paid}"}
+            conn.execute(
+                "INSERT INTO audit_log(actor, action, details) VALUES ('system', 'PAYMENT_AMOUNT_MISMATCH', ?)",
+                (f"TXN:{row['txn_id']} EXPECTED_KOBO:{expected_kobo} PAID_KOBO:{paid_kobo}",),
+            )
+        return {"ok": False, "error": "Payment amount does not match the locked order total."}
 
     release_code = generate_release_code()
     code_hash = hash_release_code(release_code)
@@ -267,15 +239,17 @@ def confirm_payment_received(payment_reference: str, amount_paid: float) -> dict
         conn.execute(
             """UPDATE escrow_ledger
                SET status='ESCROW_LOCKED', release_code_hash=?, payment_confirmed_at=datetime('now')
+                   ,amount_paid_kobo=?
                WHERE txn_id=?""",
-            (code_hash, row["txn_id"]),
+            (code_hash, paid_kobo, row["txn_id"]),
         )
         conn.execute(
             "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
-            (row["buyer_phone"], "ESCROW_LOCKED", f"TXN:{row['txn_id']} AMT:{amount_paid}"),
+            (row["buyer_phone"], "ESCROW_LOCKED", f"TXN:{row['txn_id']} AMOUNT_KOBO:{paid_kobo}"),
         )
 
-    notify_escrow_locked(row["farmer_phone"], row["buyer_phone"], row["crop"], amount_paid, row["txn_id"])
+    paid_naira = fee_service.from_kobo(paid_kobo)
+    notify_escrow_locked(row["farmer_phone"], row["buyer_phone"], row["crop"], paid_naira, row["txn_id"])
     notify_release_code(row["buyer_phone"], release_code, row["txn_id"])
     return {"ok": True, "txn_id": row["txn_id"]}
 
@@ -426,7 +400,7 @@ def expire_stale_escrows() -> dict:
     # 1. Unpaid, abandoned payment attempts
     stale_pending = fetchall(
         """SELECT txn_id, buyer_phone FROM escrow_ledger
-           WHERE status = 'PENDING_PAYMENT'
+           WHERE status IN ('PENDING_PAYMENT', 'PAYMENT_INITIALIZED')
              AND locked_at < datetime('now', ?)""",
         (f"-{config.PAYMENT_PENDING_TIMEOUT_MINUTES} minutes",),
     )

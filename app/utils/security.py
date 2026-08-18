@@ -107,8 +107,9 @@ def verify_and_upgrade_pin(table: str, phone: str, plain_pin: str, stored_hash: 
             from app.models.database import get_db
             with get_db() as conn:
                 conn.execute(
-                    f"UPDATE {table} SET pin_hash = ? WHERE phone = ?",
-                    (hash_pin(plain_pin), phone),
+                    f"""UPDATE {table} SET pin_hash = ?
+                        WHERE phone = ? OR normalized_phone = ?""",
+                    (hash_pin(plain_pin), phone, phone),
                 )
         except Exception:
             # An upgrade failure must never block a legitimate login —

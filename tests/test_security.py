@@ -222,8 +222,9 @@ def test_multi_step_ussd_flow_persists_across_requests(client):
     from app.models.database import execute
 
     execute(
-        """INSERT INTO farmers (phone, name, crop, location, pin_hash, price, kyc_status)
-           VALUES ('+2348011110002','Test Farmer','Maize','Lagos','x',25000,'VERIFIED')"""
+        """INSERT INTO farmers
+           (phone, name, crop, location, pin_hash, price, kyc_status, listing_status)
+           VALUES ('+2348011110002','Test Farmer','Maize','Lagos','x',25000,'VERIFIED','PUBLISHED')"""
     )
 
     def ussd(text, phone="+2348099990001"):
@@ -236,5 +237,8 @@ def test_multi_step_ussd_flow_persists_across_requests(client):
     ussd("2*1*Maize")            # sets session: farmer list
     r = ussd("2*1*Maize*1")      # reads session to resolve chosen farmer
     assert b"Test Farmer" in r.data
-    r2 = ussd("2*1*Maize*1*2")   # reads session again for the summary
-    assert b"51,250" in r2.data or b"51250" in r2.data
+    r2 = ussd("2*1*Maize*1*2")   # reads session again before delivery input
+    assert b"delivery address" in r2.data
+    r3 = ussd("2*1*Maize*1*2*Lagos")
+    assert b"Quote Request" in r3.data
+    assert b"1,250" in r3.data

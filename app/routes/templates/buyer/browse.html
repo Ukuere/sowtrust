@@ -23,9 +23,9 @@
     {% for p in products %}
       <a class="card" style="text-decoration:none; color:inherit;"
          href="{{ url_for('buyer_web.product_detail', crop=p.name) }}">
-        {% if p.product_image_path %}
-          <img class="product-thumb" src="{{ url_for('product_media.view_product_image', path=p.product_image_path) }}" alt="{{ p.name }}">
-        {% endif %}
+        <img class="product-thumb" loading="lazy"
+             src="{% if p.product_image_path %}{{ url_for('product_media.view_product_image', path=p.product_image_path) }}{% else %}{{ url_for('static', filename='img/sowtrust-product-placeholder.png') }}{% endif %}"
+             alt="{{ p.name }} produce listing">
         <h2>{{ p.name }}</h2>
         <span class="muted">
           {{ p.seller_count }} seller{{ 's' if p.seller_count != 1 else '' }} available
@@ -36,7 +36,7 @@
   </div>
 {% else %}
   <div class="card">
-    <p class="muted">No verified listings right now — check back shortly.</p>
+    <p class="muted">No published listings right now — check back shortly.</p>
   </div>
 {% endif %}
 {% endblock %}

@@ -5,6 +5,7 @@
   <h1>Confirm delivery — TXN {{ txn_id }}</h1>
   <p class="muted">Ask the buyer for the delivery code they received by SMS. Only enter it once the goods have actually been handed over.</p>
   <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <label>Delivery code</label>
     <input type="text" name="delivery_code" style="text-transform:uppercase;" maxlength="6" required>
     <button type="submit">Confirm delivery</button>

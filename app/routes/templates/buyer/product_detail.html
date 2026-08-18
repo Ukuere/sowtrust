@@ -6,13 +6,18 @@
 {% if farmers %}
   {% for f in farmers %}
     <div class="card">
-      {% if f.product_image_path %}
-        <img class="product-thumb" src="{{ url_for('product_media.view_product_image', path=f.product_image_path) }}" alt="{{ f.crop }}">
-      {% endif %}
+      <img class="product-thumb" loading="lazy"
+           src="{% if f.product_image_path %}{{ url_for('product_media.view_product_image', path=f.product_image_path) }}{% else %}{{ url_for('static', filename='img/sowtrust-product-placeholder.png') }}{% endif %}"
+           alt="{{ f.crop }} produce listing">
       <div class="row">
         <div>
           <h2 style="margin-bottom:2px;">{{ f.name }}</h2>
           <span class="muted">{{ f.location }}</span>
+          {% if f.verification_status == 'VERIFIED' or f.kyc_status == 'VERIFIED' %}
+            <span class="status QUOTE_READY">Verified farmer</span>
+          {% else %}
+            <span class="status PENDING_PAYMENT">Not yet verified</span>
+          {% endif %}
           {% if f.product_description %}
             <p>{{ f.product_description }}</p>
           {% endif %}
@@ -22,7 +27,11 @@
         </div>
         <div style="text-align:right;">
           <div><strong>&#8358;{{ "{:,.0f}".format(f.price) }}</strong> <span class="muted">/ bag</span></div>
-          <a class="btn" href="{{ url_for('buyer_web.checkout', farmer_phone=f.phone, crop=crop) }}">Order</a>
+          {% if f.verification_status == 'VERIFIED' or f.kyc_status == 'VERIFIED' %}
+            <a class="btn" href="{{ url_for('buyer_web.checkout', farmer_phone=f.phone, crop=crop) }}">Order</a>
+          {% else %}
+            <p class="muted">Ordering opens after identity verification.</p>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -31,6 +40,7 @@
   <div class="card">
     <p class="muted">No published sellers for "{{ crop }}" right now.</p>
     <form method="post" action="{{ url_for('buyer_web.notify_product', crop=crop) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <label>Quantity you need (bags)</label>
       <input type="number" min="1" name="quantity" value="1">
       <button type="submit">Notify me when available</button>

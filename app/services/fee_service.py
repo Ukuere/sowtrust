@@ -15,7 +15,26 @@ total minus rounded parts. This means the ledger always balances
 exactly (buyer_total == farmer_settlement + logistics_settlement +
 sowtrust_revenue) with no possibility of a rounding-drift mismatch.
 """
+from decimal import Decimal, ROUND_HALF_UP
+
 from app.models.database import fetchone
+
+
+def to_kobo(amount) -> int:
+    """Convert a naira value to integer kobo without binary-float drift."""
+    value = Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return int((value * 100).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def from_kobo(amount_kobo: int) -> float:
+    return float((Decimal(int(amount_kobo)) / 100).quantize(Decimal("0.01")))
+
+
+def _percentage_kobo(amount_kobo: int, percent) -> int:
+    return int(
+        (Decimal(amount_kobo) * Decimal(str(percent)) / Decimal("100"))
+        .to_integral_value(rounding=ROUND_HALF_UP)
+    )
 
 
 def get_platform_config() -> dict:
@@ -43,14 +62,22 @@ def calculate_product_fees(product_amount: float, cfg: dict | None = None) -> di
       -> buyer_subtotal (product + buyer fee, excludes logistics) = 102,500
     """
     cfg = cfg or get_platform_config()
-    buyer_fee = round(product_amount * cfg["buyer_fee_percent"] / 100, 2)
-    seller_fee = round(product_amount * cfg["seller_fee_percent"] / 100, 2)
+    product_kobo = to_kobo(product_amount)
+    buyer_fee_kobo = _percentage_kobo(product_kobo, cfg["buyer_fee_percent"])
+    seller_fee_kobo = _percentage_kobo(product_kobo, cfg["seller_fee_percent"])
+    farmer_kobo = product_kobo - seller_fee_kobo
+    subtotal_kobo = product_kobo + buyer_fee_kobo
     return {
-        "product_amount": round(product_amount, 2),
-        "buyer_platform_fee": buyer_fee,
-        "seller_platform_fee": seller_fee,
-        "farmer_settlement_amount": round(product_amount - seller_fee, 2),
-        "buyer_subtotal": round(product_amount + buyer_fee, 2),
+        "product_amount": from_kobo(product_kobo),
+        "buyer_platform_fee": from_kobo(buyer_fee_kobo),
+        "seller_platform_fee": from_kobo(seller_fee_kobo),
+        "farmer_settlement_amount": from_kobo(farmer_kobo),
+        "buyer_subtotal": from_kobo(subtotal_kobo),
+        "product_amount_kobo": product_kobo,
+        "buyer_platform_fee_kobo": buyer_fee_kobo,
+        "seller_platform_fee_kobo": seller_fee_kobo,
+        "farmer_settlement_amount_kobo": farmer_kobo,
+        "buyer_subtotal_kobo": subtotal_kobo,
     }
 
 
@@ -65,11 +92,16 @@ def calculate_logistics_fees(logistics_amount: float, cfg: dict | None = None) -
       -> logistics_settlement_amount = 14,625
     """
     cfg = cfg or get_platform_config()
-    fee = round(logistics_amount * cfg["logistics_fee_percent"] / 100, 2)
+    logistics_kobo = to_kobo(logistics_amount)
+    fee_kobo = _percentage_kobo(logistics_kobo, cfg["logistics_fee_percent"])
+    settlement_kobo = logistics_kobo - fee_kobo
     return {
-        "logistics_amount": round(logistics_amount, 2),
-        "logistics_platform_fee": fee,
-        "logistics_settlement_amount": round(logistics_amount - fee, 2),
+        "logistics_amount": from_kobo(logistics_kobo),
+        "logistics_platform_fee": from_kobo(fee_kobo),
+        "logistics_settlement_amount": from_kobo(settlement_kobo),
+        "logistics_amount_kobo": logistics_kobo,
+        "logistics_platform_fee_kobo": fee_kobo,
+        "logistics_settlement_amount_kobo": settlement_kobo,
     }
 
 
@@ -81,12 +113,15 @@ def calculate_full_order(product_amount: float, logistics_amount: float = 0.0) -
     cfg = get_platform_config()
     product = calculate_product_fees(product_amount, cfg)
     logistics = calculate_logistics_fees(logistics_amount, cfg) if logistics_amount else {
-        "logistics_amount": 0.0, "logistics_platform_fee": 0.0, "logistics_settlement_amount": 0.0
+        "logistics_amount": 0.0, "logistics_platform_fee": 0.0,
+        "logistics_settlement_amount": 0.0, "logistics_amount_kobo": 0,
+        "logistics_platform_fee_kobo": 0, "logistics_settlement_amount_kobo": 0,
     }
 
-    buyer_total = round(product["buyer_subtotal"] + logistics["logistics_amount"], 2)
-    sowtrust_total_revenue = round(
-        product["buyer_platform_fee"] + product["seller_platform_fee"] + logistics["logistics_platform_fee"], 2
+    buyer_total_kobo = product["buyer_subtotal_kobo"] + logistics["logistics_amount_kobo"]
+    revenue_kobo = (
+        product["buyer_platform_fee_kobo"] + product["seller_platform_fee_kobo"]
+        + logistics["logistics_platform_fee_kobo"]
     )
 
     result = {
@@ -97,20 +132,30 @@ def calculate_full_order(product_amount: float, logistics_amount: float = 0.0) -
         "logistics_amount": logistics["logistics_amount"],
         "logistics_platform_fee": logistics["logistics_platform_fee"],
         "logistics_settlement_amount": logistics["logistics_settlement_amount"],
-        "buyer_total": buyer_total,
-        "sowtrust_total_revenue": sowtrust_total_revenue,
+        "buyer_total": from_kobo(buyer_total_kobo),
+        "sowtrust_total_revenue": from_kobo(revenue_kobo),
+        "product_amount_kobo": product["product_amount_kobo"],
+        "buyer_platform_fee_kobo": product["buyer_platform_fee_kobo"],
+        "seller_platform_fee_kobo": product["seller_platform_fee_kobo"],
+        "farmer_settlement_amount_kobo": product["farmer_settlement_amount_kobo"],
+        "logistics_amount_kobo": logistics["logistics_amount_kobo"],
+        "logistics_platform_fee_kobo": logistics["logistics_platform_fee_kobo"],
+        "logistics_settlement_amount_kobo": logistics["logistics_settlement_amount_kobo"],
+        "buyer_total_kobo": buyer_total_kobo,
+        "sowtrust_total_revenue_kobo": revenue_kobo,
     }
 
     # Self-check every time — if this ever fails, something in the math
     # above is wrong and we want a loud, immediate error, not a silent
     # ledger mismatch discovered weeks later during reconciliation.
-    check = round(
-        result["farmer_settlement_amount"] + result["logistics_settlement_amount"] + result["sowtrust_total_revenue"],
-        2
+    check_kobo = (
+        result["farmer_settlement_amount_kobo"]
+        + result["logistics_settlement_amount_kobo"]
+        + result["sowtrust_total_revenue_kobo"]
     )
-    assert check == buyer_total, (
-        f"Ledger integrity check failed: components sum to {check}, "
-        f"but buyer_total is {buyer_total}. This should never happen — "
+    assert check_kobo == buyer_total_kobo, (
+        f"Ledger integrity check failed: components sum to {check_kobo} kobo, "
+        f"but buyer_total is {buyer_total_kobo} kobo. This should never happen — "
         f"do not proceed with this transaction."
     )
 

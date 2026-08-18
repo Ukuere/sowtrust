@@ -50,12 +50,10 @@
   {% for f in listings %}
     <div class="card listing">
       <div>
-        {% if f.product_image_path %}
-          <img src="{{ url_for('product_media.view_product_image', path=f.product_image_path) }}" alt="{{ f.crop }}">
-        {% endif %}
+        <img loading="lazy" src="{% if f.product_image_path %}{{ url_for('product_media.view_product_image', path=f.product_image_path) }}{% else %}{{ url_for('static', filename='img/sowtrust-product-placeholder.png') }}{% endif %}" alt="{{ f.crop }} listing">
       </div>
       <div>
-        <div class="row"><strong>{{ f.crop }}</strong><span class="muted">{{ f.listing_status }}</span></div>
+        <div class="row"><strong>{{ f.crop }}</strong><span class="muted">{{ f.listing_status }} / {{ f.verification_status }}</span></div>
         <div class="row"><span>Farmer</span><span>{{ f.name }} - {{ f.phone }}</span></div>
         <div class="row"><span>Location</span><span>{{ f.location }}</span></div>
         <div class="row"><span>Price</span><span>&#8358;{{ "{:,.2f}".format(f.price or 0) }} / bag</span></div>
@@ -66,15 +64,29 @@
         {% if f.listing_rejection_reason %}
           <p class="muted">Previous rejection: {{ f.listing_rejection_reason }}</p>
         {% endif %}
-        <form class="inline" method="post" action="{{ url_for('admin_products.decide', farmer_phone=f.phone) }}">
-          <input type="hidden" name="decision" value="PUBLISHED">
-          <button type="submit" class="approve">Publish</button>
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('admin_products.update_image', farmer_phone=f.phone) }}">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <input type="file" name="product_image" accept="image/jpeg,image/png" required>
+          <button type="submit">Replace image</button>
         </form>
+        <form class="inline" method="post" action="{{ url_for('admin_products.decide', farmer_phone=f.phone) }}">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="decision" value="VERIFIED">
+          <button type="submit" class="approve">Mark verified</button>
+        </form>
+        {% if f.listing_status != 'PUBLISHED' %}
+        <form class="inline" method="post" action="{{ url_for('admin_products.decide', farmer_phone=f.phone) }}">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="decision" value="PUBLISHED">
+          <button type="submit" class="approve">Restore listing</button>
+        </form>
+        {% endif %}
         <form class="inline" method="post" action="{{ url_for('admin_products.decide', farmer_phone=f.phone) }}"
               onsubmit="return this.rejection_reason.value.trim().length > 0 || alert('Enter a rejection reason.');">
-          <input type="hidden" name="decision" value="REJECTED">
-          <input type="text" name="rejection_reason" placeholder="Rejection reason">
-          <button type="submit" class="reject">Reject</button>
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="decision" value="SUSPENDED">
+          <input type="text" name="rejection_reason" placeholder="Suspension reason">
+          <button type="submit" class="reject">Suspend</button>
         </form>
       </div>
     </div>

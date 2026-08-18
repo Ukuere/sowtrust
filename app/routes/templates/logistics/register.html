@@ -4,6 +4,7 @@
 <div class="card">
   <h1>Register as a delivery provider</h1>
   <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <label>Full name</label>
     <input type="text" name="name" value="{{ form.get('name','') }}" required>
 

@@ -22,6 +22,7 @@ def client(tmp_path):
     os.environ["DATABASE_PATH"] = test_db
     config.DATABASE_PATH = test_db
     os.environ["UPLOAD_FOLDER"] = str(tmp_path / "uploads")
+    config.UPLOAD_FOLDER = os.environ["UPLOAD_FOLDER"]
     config.DASHBOARD_PASSWORD = "test_admin_password"
 
     from migrations.init_db import init_db
@@ -74,10 +75,11 @@ def _submit_kyc(client, id_number="12345678901"):
     }, content_type="multipart/form-data")
 
 
-def _admin_auth():
-    import base64
-    creds = base64.b64encode(b"reviewer:test_admin_password").decode()
-    return {"Authorization": f"Basic {creds}"}
+def _admin_session(client):
+    with client.session_transaction() as session:
+        session["staff_user_id"] = 1
+        session["staff_username"] = "reviewer"
+        session["staff_role"] = "REVIEWER"
 
 
 def _verify_provider_full(client, phone="+2348033335555"):
@@ -90,8 +92,8 @@ def _verify_provider_full(client, phone="+2348033335555"):
         "SELECT * FROM kyc_verifications WHERE user_id = ? AND user_type = 'logistics_provider'",
         (phone,),
     )
-    client.post(f"/admin/logistics/{record['id']}/decide", data={"decision": "VERIFIED"},
-                headers=_admin_auth())
+    _admin_session(client)
+    client.post(f"/admin/logistics/{record['id']}/decide", data={"decision": "VERIFIED"})
     execute(
         """UPDATE logistics_providers SET bank_code='058', bank_account_number='0123456789',
            bank_account_name='Tunde Driver', bank_verified_at=datetime('now') WHERE phone=?""",
@@ -99,12 +101,9 @@ def _verify_provider_full(client, phone="+2348033335555"):
     )
 
 
-def _seed_paid_order_with_logistics(txn_id_holder, price=1000, quantity=2):
-    """Creates a farmer, buyer, and order; records a logistics quote
-    WHILE the order is still PENDING_PAYMENT (record_quote requires
-    this — matches the spec's flow order: quote before payment); only
-    THEN marks the order as paid, leaving a job in the 'available' state
-    a provider can accept."""
+def _seed_paid_order_with_logistics(txn_id_holder, price=1000, quantity=2,
+                                    quote_provider_phone="+2348033335555"):
+    """Create a quote-first order, then simulate confirmed escrow funds."""
     from app.models.database import execute, fetchone
     execute(
         """INSERT INTO farmers (phone, name, crop, location, pin_hash, price, kyc_status, is_active)
@@ -121,7 +120,10 @@ def _seed_paid_order_with_logistics(txn_id_holder, price=1000, quantity=2):
     txn_id_holder["txn_id"] = txn_id
     logistics_service.create_quote_request(txn_id, "Ikorodu", "Lekki", requested_by="test")
 
-    quote_result = logistics_service.record_quote(txn_id, 5000, "Ikorodu", "Lekki")
+    quote_result = logistics_service.record_quote(
+        txn_id, 5000, "Ikorodu", "Lekki",
+        logistics_provider_id=quote_provider_phone,
+    )
     assert quote_result["ok"], quote_result.get("error")
 
     execute("UPDATE escrow_ledger SET status = 'ESCROW_LOCKED' WHERE txn_id = ?", (txn_id,))
@@ -194,8 +196,21 @@ def test_unverified_provider_cannot_accept_job(client):
     """assign_provider() itself blocks this — this test confirms the web
     route surfaces that error rather than silently succeeding."""
     _register_provider(client)
+    from app.models.database import execute
+    from app.services import logistics_service
+    with patch("app.services.logistics_service.send_sms", return_value=True):
+        result = logistics_service.register_provider(
+            "+2348033377777", "Verified Quote Provider", "Lagos", "Van", "1234"
+        )
+    assert result["ok"] is True
+    execute(
+        "UPDATE logistics_providers SET kyc_status='VERIFIED' WHERE phone=?",
+        ("+2348033377777",),
+    )
     holder = {}
-    _seed_paid_order_with_logistics(holder)
+    _seed_paid_order_with_logistics(
+        holder, quote_provider_phone="+2348033377777"
+    )
     resp = client.post(f"/logistics/jobs/{holder['txn_id']}/accept", follow_redirects=True)
     assert b"not yet verified" in resp.data
 
@@ -208,8 +223,8 @@ def test_verified_provider_without_bank_account_cannot_accept_job(client):
         "SELECT * FROM kyc_verifications WHERE user_id = ? AND user_type = 'logistics_provider'",
         ("+2348033335555",),
     )
-    client.post(f"/admin/logistics/{record['id']}/decide", data={"decision": "VERIFIED"},
-                headers=_admin_auth())
+    _admin_session(client)
+    client.post(f"/admin/logistics/{record['id']}/decide", data={"decision": "VERIFIED"})
 
     holder = {}
     _seed_paid_order_with_logistics(holder)
@@ -247,13 +262,15 @@ def test_cannot_resubmit_while_under_review(client):
 
 def test_admin_logistics_queue_requires_auth(client):
     resp = client.get("/admin/logistics/")
-    assert resp.status_code == 401
+    assert resp.status_code == 302
+    assert "/staff/login" in resp.headers["Location"]
 
 
 def test_admin_logistics_queue_shows_submission(client):
     _register_provider(client)
     _submit_kyc(client)
-    resp = client.get("/admin/logistics/", headers=_admin_auth())
+    _admin_session(client)
+    resp = client.get("/admin/logistics/")
     assert resp.status_code == 200
     assert b"Tunde Driver" in resp.data
 
@@ -266,8 +283,8 @@ def test_admin_approve_verifies_provider(client):
         "SELECT * FROM kyc_verifications WHERE user_id = ? AND user_type = 'logistics_provider'",
         ("+2348033335555",),
     )
-    client.post(f"/admin/logistics/{record['id']}/decide", data={"decision": "VERIFIED"},
-                headers=_admin_auth())
+    _admin_session(client)
+    client.post(f"/admin/logistics/{record['id']}/decide", data={"decision": "VERIFIED"})
     from app.services.logistics_service import get_provider
     assert get_provider("+2348033335555")["kyc_status"] == "VERIFIED"
 
@@ -280,8 +297,9 @@ def test_admin_reject_requires_reason(client):
         "SELECT * FROM kyc_verifications WHERE user_id = ? AND user_type = 'logistics_provider'",
         ("+2348033335555",),
     )
+    _admin_session(client)
     resp = client.post(f"/admin/logistics/{record['id']}/decide", data={"decision": "REJECTED"},
-                        headers=_admin_auth(), follow_redirects=True)
+                        follow_redirects=True)
     assert b"reason is required" in resp.data
 
 

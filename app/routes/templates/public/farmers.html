@@ -1,0 +1,15 @@
+{% extends "public/base.html" %}
+{% block title %}Farmers | SowTrust{% endblock %}
+{% block content %}<div class="content">
+  <h1>SowTrust for farmers</h1>
+  <p>Farmers can register from a supported mobile phone, list produce and receive transaction updates without needing a smartphone.</p>
+  {% if ussd_is_live %}
+    <div class="notice"><strong>Live SowTrust USSD:</strong> Dial {{ ussd_code }} from your registered phone.</div>
+  {% else %}
+    <div class="notice"><strong>Testing status:</strong> The current USSD setup is in {{ ussd_mode|lower }} mode. A sandbox code is not a public live service. Contact SowTrust support for an approved test session.</div>
+  {% endif %}
+  <h2>What happens after registration</h2>
+  <p>Your farmer record is created immediately. Once you set a valid price, the listing can appear in the marketplace with a clear verification badge. An authorized agent can add a genuine product photograph later.</p>
+  <h2>Need help?</h2>
+  <p><a class="button" href="{{ url_for('public_web.support') }}">Contact SowTrust support</a></p>
+</div>{% endblock %}

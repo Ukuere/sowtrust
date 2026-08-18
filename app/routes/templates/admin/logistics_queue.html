@@ -42,7 +42,7 @@
 </head>
 <body>
 <h1>Logistics provider KYC review queue</h1>
-<p class="muted">Type your name as the Basic Auth username so it's recorded against each decision.</p>
+<p class="muted">Every decision is recorded against your authenticated staff account.</p>
 
 {% with messages = get_flashed_messages(with_categories=true) %}
   {% for category, message in messages %}
@@ -61,6 +61,7 @@
       <div class="row"><span>Current buyer subtotal</span><span>&#8358;{{ "{:,.2f}".format(q.buyer_total or 0) }}</span></div>
 
       <form method="post" action="{{ url_for('admin_logistics.lock_quote', txn_id=q.order_id) }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <div class="quote-form">
           <div>
             <label>Pickup</label>
@@ -98,6 +99,46 @@
   <p class="muted">No logistics quote requests pending.</p>
 {% endif %}
 
+<h2>Locked quote provider replacements</h2>
+<p class="muted">Use only when the selected provider can no longer fulfill the job. Higher prices require buyer approval and are blocked after payment starts.</p>
+{% if locked_quotes %}
+  {% for q in locked_quotes %}
+    <div class="card">
+      <div class="row"><strong>Order {{ q.order_id }}</strong><span class="muted">{{ q.order_status.replace('_', ' ') }}</span></div>
+      <div class="row"><span>Current provider</span><span>{{ q.provider_name or 'Unavailable' }}</span></div>
+      <div class="row"><span>Locked logistics price</span><span>&#8358;{{ "{:,.2f}".format(q.quoted_amount or 0) }}</span></div>
+      <div class="row"><span>Buyer accepted</span><span>{{ 'Yes' if q.buyer_accepted_at else 'No' }}</span></div>
+      <form method="post" action="{{ url_for('admin_logistics.replace_provider', txn_id=q.order_id) }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <div class="quote-form">
+          <div>
+            <label>Replacement provider</label>
+            <select name="logistics_provider_id" required>
+              <option value="">Select provider</option>
+              {% for p in providers %}
+                {% if p.id != q.logistics_provider_id %}
+                  <option value="{{ p.id }}">{{ p.name }}{% if p.business_name %} - {{ p.business_name }}{% endif %}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>Provider quote (NGN)</label>
+            <input type="number" min="1" step="0.01" name="proposed_amount" value="{{ q.quoted_amount }}" required>
+          </div>
+          <div>
+            <label>Reason</label>
+            <input type="text" name="reason" placeholder="Provider unavailable" required>
+          </div>
+        </div>
+        <button type="submit" class="approve">Request replacement</button>
+      </form>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No active locked quotes.</p>
+{% endif %}
+
 <h2>Logistics provider KYC review queue</h2>
 {% if pending %}
   {% for v in pending %}
@@ -114,11 +155,13 @@
       <div class="row"><span>Vehicle reg. document</span><span><a href="{{ url_for('admin_documents.view_document', path=v.vehicle_registration_document_path) }}" title="{{ v.vehicle_registration_document_path }}" target="_blank" rel="noopener">Open document</a></span></div>
 
       <form class="inline" method="post" action="{{ url_for('admin_logistics.decide', verification_id=v.id) }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="decision" value="VERIFIED">
         <button type="submit" class="approve">Approve</button>
       </form>
       <form class="inline" method="post" action="{{ url_for('admin_logistics.decide', verification_id=v.id) }}"
             onsubmit="return this.rejection_reason.value.trim().length > 0 || alert('Enter a rejection reason.');">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="decision" value="REJECTED">
         <input type="text" name="rejection_reason" placeholder="Rejection reason">
         <button type="submit" class="reject">Reject</button>

@@ -23,6 +23,7 @@ import hashlib
 import hmac
 import requests
 from config.settings import config
+from app.services.fee_service import from_kobo, to_kobo
 
 BASE_URL = "https://api.paystack.co"
 
@@ -61,7 +62,7 @@ def initiate_bank_transfer_charge(email: str, amount_naira: float, reference: st
             headers=_headers(),
             json={
                 "email": email,
-                "amount": int(round(amount_naira * 100)),  # Paystack uses kobo
+                "amount": to_kobo(amount_naira),
                 "currency": "NGN",
                 "reference": reference,
                 "bank_transfer": {"account_expires_at": None},
@@ -107,8 +108,10 @@ def verify_transaction(reference: str) -> dict:
         return {
             "ok": True,
             "paid": tx.get("status") == "success",
-            "amount_naira": tx.get("amount", 0) / 100,
+            "amount_kobo": int(tx.get("amount", 0)),
+            "amount_naira": from_kobo(int(tx.get("amount", 0))),
             "reference": tx.get("reference"),
+            "currency": tx.get("currency"),
         }
     except requests.RequestException as e:
         return {"ok": False, "error": f"Network error contacting Paystack: {e}"}
@@ -173,7 +176,7 @@ def initiate_transfer(recipient_code: str, amount_naira: float, reference: str, 
             headers=_headers(),
             json={
                 "source": "balance",
-                "amount": int(round(amount_naira * 100)),
+                "amount": to_kobo(amount_naira),
                 "recipient": recipient_code,
                 "reference": reference,
                 "reason": reason,
@@ -204,7 +207,7 @@ def initiate_refund(transaction_reference: str, amount_naira: float | None = Non
     try:
         payload = {"transaction": transaction_reference}
         if amount_naira is not None:
-            payload["amount"] = int(round(amount_naira * 100))
+            payload["amount"] = to_kobo(amount_naira)
         resp = requests.post(
             f"{BASE_URL}/refund", headers=_headers(), json=payload, timeout=15,
         )

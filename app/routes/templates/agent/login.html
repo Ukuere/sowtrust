@@ -4,11 +4,14 @@
 <h1>Agent login</h1>
 <div class="card">
   <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <label>Phone number</label>
     <input name="phone" required>
     <label>Agent PIN</label>
     <input name="pin" type="password" inputmode="numeric" required>
     <button type="submit">Log in</button>
   </form>
+  <p class="muted">New to SowTrust? <a class="plain" href="{{ url_for('agent_web.register') }}">Become an agent</a>.</p>
+  <p class="muted">Registered through USSD? <a class="plain" href="{{ url_for('account_activation.activate_agent') }}">Activate passwordless web access</a>.</p>
 </div>
 {% endblock %}

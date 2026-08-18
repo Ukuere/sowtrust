@@ -2,14 +2,15 @@
 Sowtrust Global — CEO Command Console v6.0
 Run: streamlit run dashboard/app.py
 """
-import sqlite3
 import os
 import sys
 import hashlib
+from urllib.parse import quote
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 from datetime import datetime, timedelta
 
@@ -70,31 +71,25 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ─────────────────────────────────────────────────────────
-# DATABASE ENGINE
+# AUTHORITATIVE BACKEND API
 # ─────────────────────────────────────────────────────────
-@st.cache_resource
-def get_conn():
-    conn = sqlite3.connect(config.DATABASE_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def rdf(sql, params=()):
+def api_request(method, path, payload=None):
+    if not config.DASHBOARD_API_TOKEN:
+        st.error("DASHBOARD_API_TOKEN is not configured for this service.")
+        return None
     try:
-        return pd.read_sql(sql, get_conn(), params=params)
-    except Exception:
-        return pd.DataFrame()
-
-
-def run_sql(sql, params=()):
-    c = get_conn()
-    try:
-        c.execute(sql, params)
-        c.commit()
-        return True
-    except Exception as e:
-        st.error(f"DB Error: {e}")
-        return False
+        response = requests.request(
+            method,
+            f"{config.BACKEND_API_URL.rstrip('/')}{path}",
+            headers={"Authorization": f"Bearer {config.DASHBOARD_API_TOKEN}"},
+            json=payload,
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        st.error(f"Authoritative backend unavailable: {exc}")
+        return None
 
 
 def safe_df(df, cols):
@@ -112,10 +107,7 @@ def get_product_names(farmers_df=None):
     Products are now dynamic, not config.CROPS. Read them from the products
     table first, then fall back to farmer crop values for older databases.
     """
-    products = rdf("SELECT name FROM products ORDER BY name ASC")
     names = []
-    if not products.empty and "name" in products.columns:
-        names.extend(products["name"].dropna().astype(str).str.strip().tolist())
     if farmers_df is not None and not farmers_df.empty and "crop" in farmers_df.columns:
         names.extend(farmers_df["crop"].dropna().astype(str).str.strip().tolist())
     names = sorted({name for name in names if name})
@@ -125,13 +117,23 @@ def get_product_names(farmers_df=None):
 # ─────────────────────────────────────────────────────────
 # LOAD DATA
 # ─────────────────────────────────────────────────────────
+@st.cache_data(ttl=30)
 def load_data():
-    farmers = rdf("SELECT * FROM farmers ORDER BY created_at DESC")
-    agents = rdf("SELECT * FROM agents ORDER BY recruits DESC")
-    escrow = rdf("SELECT * FROM escrow_ledger ORDER BY locked_at DESC")
-    requests = rdf("SELECT * FROM buyer_requests ORDER BY created_at DESC")
-    audit = rdf("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200")
-    logistics = rdf("SELECT * FROM logistics_log ORDER BY created_at DESC")
+    snapshot = api_request("GET", "/api/internal/dashboard/snapshot")
+    if snapshot is None:
+        st.stop()
+    def frame(name):
+        return pd.DataFrame(snapshot.get(name, []))
+    farmers = frame("farmers")
+    agents = frame("agents")
+    buyers = frame("buyers")
+    providers = frame("providers")
+    users = frame("users")
+    escrow = frame("escrow")
+    requests_df = frame("requests")
+    audit = frame("audit")
+    logistics = frame("logistics")
+    identity_issues = frame("identity_issues")
     for df, col in [
         (farmers, "price"),
         (farmers, "balance"),
@@ -140,10 +142,12 @@ def load_data():
     ]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
-    return farmers, agents, escrow, requests, audit, logistics
+    return farmers, agents, buyers, providers, users, escrow, requests_df, audit, logistics, identity_issues
 
 
-farmers_df, agents_df, escrow_df, requests_df, audit_df, logistics_df = load_data()
+(farmers_df, agents_df, buyers_df, providers_df, users_df, escrow_df,
+ requests_df, audit_df, logistics_df, identity_issues_df) = load_data()
+revenue_col = "sowtrust_total_revenue" if "sowtrust_total_revenue" in escrow_df.columns else "service_fee"
 
 # ─────────────────────────────────────────────────────────
 # SIDEBAR
@@ -161,6 +165,7 @@ with st.sidebar:
             "🚚 Logistics",
             "👥 Agent Network",
             "👨‍🌾 Farmer Registry",
+            "👤 User Directory",
             "🤖 Market Intelligence",
             "📋 Audit Log",
             "⚙️ Admin Tools",
@@ -168,7 +173,7 @@ with st.sidebar:
     )
     st.divider()
     if st.button("🔄 Refresh Data", use_container_width=True):
-        st.cache_resource.clear()
+        st.cache_data.clear()
         st.rerun()
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state.authenticated = False
@@ -193,16 +198,19 @@ st.markdown(
 # ─────────────────────────────────────────────────────────
 if page == "📊 Overview":
     locked = escrow_df[escrow_df["status"] == "ESCROW_LOCKED"]["amount"].sum() if not escrow_df.empty else 0
-    revenue = escrow_df["service_fee"].sum() if not escrow_df.empty else 0
-    delivered = len(escrow_df[escrow_df["status"] == "DELIVERED"]) if not escrow_df.empty else 0
+    revenue_col = "sowtrust_total_revenue" if "sowtrust_total_revenue" in escrow_df.columns else "service_fee"
+    revenue = escrow_df[revenue_col].fillna(0).sum() if not escrow_df.empty else 0
+    total_users = users_df["user_id"].nunique() if not users_df.empty else 0
+    published = len(farmers_df[farmers_df["listing_status"] == "PUBLISHED"]) if not farmers_df.empty else 0
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     for col, val, label in [
-        (c1, len(farmers_df), "👨‍🌾 Farmers"),
-        (c2, len(agents_df), "👥 Agents"),
-        (c3, len(escrow_df), "📦 Total Orders"),
-        (c4, f"₦{locked:,.0f}", "🔒 Escrow Locked"),
-        (c5, f"₦{revenue:,.0f}", "💰 Revenue Earned"),
+        (c1, total_users, "Total users"),
+        (c2, len(farmers_df), "Farmers"),
+        (c3, len(buyers_df), "Buyers"),
+        (c4, len(providers_df), "Logistics"),
+        (c5, published, "Published listings"),
+        (c6, f"₦{locked:,.0f}", "Escrow locked"),
     ]:
         col.markdown(
             f'<div class="metric-card"><div class="val">{val}</div><div class="lbl">{label}</div></div>',
@@ -308,28 +316,7 @@ elif page == "💰 Escrow & Revenue":
         )
         st.dataframe(display, use_container_width=True, hide_index=True)
 
-        with st.expander("🔓 Admin — Manual Fund Release"):
-            tid = st.selectbox("Select TXN ID", locked["txn_id"].unique())
-            reason = st.text_input("Reason for manual release")
-            if st.button("✅ Confirm Release", type="primary"):
-                if reason:
-                    farmer_p = locked[locked["txn_id"] == tid]["farmer_phone"].values[0]
-                    amount_v = locked[locked["txn_id"] == tid]["amount"].values[0]
-                    fee_v = locked[locked["txn_id"] == tid]["service_fee"].values[0]
-                    net = amount_v - fee_v
-                    run_sql(
-                        "UPDATE escrow_ledger SET status='DELIVERED',released_at=datetime('now') WHERE txn_id=?",
-                        (tid,),
-                    )
-                    run_sql("UPDATE farmers SET balance=balance+? WHERE phone=?", (net, farmer_p))
-                    run_sql(
-                        "INSERT INTO audit_log(actor,action,details) VALUES(?,?,?)",
-                        ("ADMIN", "MANUAL_RELEASE", f"TXN:{tid} REASON:{reason}"),
-                    )
-                    st.success(f"Released! NGN {net:,.0f} credited to farmer.")
-                    st.rerun()
-                else:
-                    st.warning("Please enter a reason.")
+        st.info("Fund release is intentionally unavailable here. Settlement must pass through the backend delivery-code, dispute and Paystack workflows.")
     else:
         st.success("✅ No funds currently locked in escrow.")
 
@@ -339,7 +326,7 @@ elif page == "💰 Escrow & Revenue":
         delivered = escrow_df[escrow_df["status"] == "DELIVERED"]
         c1, c2, c3 = st.columns(3)
         c1.metric("Total GMV", f"₦{escrow_df['amount'].sum():,.0f}")
-        c2.metric("Revenue (Service Fees)", f"₦{escrow_df['service_fee'].sum():,.0f}")
+        c2.metric("Platform Revenue", f"₦{escrow_df[revenue_col].fillna(0).sum():,.0f}")
         c3.metric("Completed Trades", len(delivered))
         display = safe_df(
             escrow_df,
@@ -385,17 +372,7 @@ elif page == "🚚 Logistics":
     st.markdown('<div class="section-bar"><h4>🚚 Active Shipments</h4></div>', unsafe_allow_html=True)
     if not logistics_df.empty:
         st.dataframe(logistics_df, use_container_width=True, hide_index=True)
-        in_transit = logistics_df[logistics_df["status"] == "IN_TRANSIT"]
-        if not in_transit.empty:
-            with st.expander("✅ Mark Shipment as Delivered"):
-                lid = st.selectbox("Select Logistics ID", in_transit["logistics_id"].unique())
-                if st.button("Confirm Delivery", type="primary"):
-                    run_sql(
-                        "UPDATE logistics_log SET status='DELIVERED',delivery_timestamp=datetime('now') WHERE logistics_id=?",
-                        (lid,),
-                    )
-                    st.success("Shipment marked as delivered.")
-                    st.rerun()
+        st.caption("Delivery confirmation is completed by an authorized provider using the buyer's delivery code.")
     else:
         st.info("No logistics records yet.")
 
@@ -436,16 +413,19 @@ elif page == "👥 Agent Network":
 elif page == "👨‍🌾 Farmer Registry":
     st.markdown('<div class="section-bar"><h4>👨‍🌾 Farmer Database</h4></div>', unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     product_names = get_product_names(farmers_df)
     crop_filter = col1.selectbox("Filter by Crop", ["All"] + product_names)
-    kyc_filter = col2.selectbox("Filter by KYC", ["All", "VERIFIED", "PENDING", "SUSPENDED"])
+    kyc_filter = col2.selectbox("Filter by verification", ["All", "VERIFIED", "PENDING", "UNVERIFIED", "REJECTED"])
+    channel_filter = col3.selectbox("Filter by channel", ["All", "USSD", "WEB", "ADMIN", "API", "LEGACY"])
 
     df = farmers_df.copy()
     if crop_filter != "All" and "crop" in df.columns:
         df = df[df["crop"] == crop_filter]
-    if kyc_filter != "All" and "kyc_status" in df.columns:
-        df = df[df["kyc_status"] == kyc_filter]
+    if kyc_filter != "All" and "verification_status" in df.columns:
+        df = df[df["verification_status"] == kyc_filter]
+    if channel_filter != "All" and "registration_channel" in df.columns:
+        df = df[df["registration_channel"] == channel_filter]
 
     if not df.empty:
         display = safe_df(
@@ -459,7 +439,10 @@ elif page == "👨‍🌾 Farmer Registry":
                 "price",
                 "balance",
                 "credit_score",
-                "kyc_status",
+                "verification_status",
+                "listing_status",
+                "registration_channel",
+                "account_status",
                 "created_at",
             ],
         )
@@ -469,21 +452,66 @@ elif page == "👨‍🌾 Farmer Registry":
 
     with st.expander("⚙️ Manage Farmer"):
         phone_in = st.text_input("Farmer Phone")
-        action = st.selectbox("Action", ["VERIFY KYC", "SUSPEND", "REACTIVATE"])
+        action = st.selectbox("Action", ["VERIFY PROFILE", "SUSPEND PROFILE", "REACTIVATE PROFILE", "REJECT PROFILE"])
+        reason = st.text_input("Reason (required for suspend/reject)")
         if st.button("Apply", type="primary") and phone_in:
             mapping = {
-                "VERIFY KYC": ("kyc_status", "VERIFIED"),
-                "SUSPEND": ("kyc_status", "SUSPENDED"),
-                "REACTIVATE": ("is_active", 1),
+                "VERIFY PROFILE": "VERIFY_PROFILE",
+                "SUSPEND PROFILE": "SUSPEND_PROFILE",
+                "REACTIVATE PROFILE": "REACTIVATE_PROFILE",
+                "REJECT PROFILE": "REJECT_PROFILE",
             }
-            col_name, val = mapping[action]
-            run_sql(f"UPDATE farmers SET {col_name}=? WHERE phone=?", (val, phone_in))
-            run_sql(
-                "INSERT INTO audit_log(actor,action,details) VALUES(?,?,?)",
-                ("ADMIN", action, f"Phone:{phone_in}"),
+            result = api_request(
+                "POST",
+                f"/api/internal/dashboard/farmers/{quote(phone_in, safe='')}/action",
+                {"action": mapping[action], "reason": reason},
             )
-            st.success(f"Action '{action}' applied to {phone_in}")
-            st.rerun()
+            if result and result.get("ok"):
+                st.success(f"Action '{action}' applied to {phone_in}")
+                st.cache_data.clear()
+                st.rerun()
+
+# ─────────────────────────────────────────────────────────
+# USER DIRECTORY
+# ─────────────────────────────────────────────────────────
+elif page == "👤 User Directory":
+    st.markdown('<div class="section-bar"><h4>Unified User Directory</h4></div>', unsafe_allow_html=True)
+    if users_df.empty:
+        st.info("No unified users are registered yet.")
+    else:
+        f1, f2, f3, f4 = st.columns(4)
+        role_filter = f1.selectbox("Role", ["All"] + sorted(users_df["role"].dropna().unique().tolist()))
+        channel_filter = f2.selectbox("Channel", ["All"] + sorted(users_df["registration_channel"].dropna().unique().tolist()))
+        verification_filter = f3.selectbox("Verification", ["All"] + sorted(users_df["verification_status"].dropna().unique().tolist()))
+        account_filter = f4.selectbox("Account", ["All"] + sorted(users_df["account_status"].dropna().unique().tolist()))
+        q1, q2 = st.columns(2)
+        search_text = q1.text_input("Phone or name")
+        date_range = q2.date_input("Registration date range", value=[])
+
+        directory = users_df.copy()
+        if role_filter != "All": directory = directory[directory["role"] == role_filter]
+        if channel_filter != "All": directory = directory[directory["registration_channel"] == channel_filter]
+        if verification_filter != "All": directory = directory[directory["verification_status"] == verification_filter]
+        if account_filter != "All": directory = directory[directory["account_status"] == account_filter]
+        if search_text:
+            needle = search_text.strip().lower()
+            names = directory["full_name"].fillna("").astype(str).str.lower()
+            phones = directory["normalized_phone"].fillna("").astype(str).str.lower()
+            directory = directory[names.str.contains(needle, regex=False) | phones.str.contains(needle, regex=False)]
+        if len(date_range) == 2:
+            created = pd.to_datetime(directory["created_at"], errors="coerce").dt.date
+            directory = directory[(created >= date_range[0]) & (created <= date_range[1])]
+
+        st.dataframe(
+            safe_df(directory, ["user_id", "full_name", "normalized_phone", "role",
+                                "registration_channel", "verification_status",
+                                "account_status", "phone_verified", "created_at", "last_login_at"]),
+            use_container_width=True, hide_index=True,
+        )
+        if not identity_issues_df.empty:
+            st.warning(f"{len(identity_issues_df)} unresolved identity migration issue(s) require review.")
+            with st.expander("Identity migration issues"):
+                st.dataframe(identity_issues_df, use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────────────────
 # MARKET INTELLIGENCE
@@ -620,14 +648,16 @@ elif page == "⚙️ Admin Tools":
             )
 
     with st.expander("🧹 Expire Stale Escrows"):
-        count = rdf(
-            "SELECT COUNT(*) as n FROM escrow_ledger WHERE status='ESCROW_LOCKED' AND expires_at < datetime('now')"
-        )
-        n = count["n"].values[0] if not count.empty else 0
+        if escrow_df.empty:
+            n = 0
+        else:
+            expiry = pd.to_datetime(escrow_df.get("expires_at"), errors="coerce", utc=True)
+            now = pd.Timestamp.now(tz="UTC")
+            n = int(((escrow_df["status"] == "ESCROW_LOCKED") & (expiry < now)).sum())
         st.warning(f"{n} escrow(s) past expiry.")
         if st.button("Run Expiry Job") and n > 0:
-            run_sql(
-                "UPDATE escrow_ledger SET status='EXPIRED' WHERE status='ESCROW_LOCKED' AND expires_at < datetime('now')"
-            )
-            st.success(f"Marked {n} escrows as EXPIRED.")
-            st.rerun()
+            result = api_request("POST", "/api/internal/dashboard/escrow/expire")
+            if result and result.get("ok"):
+                st.success(f"Backend expiry workflow completed: {result['result']}")
+                st.cache_data.clear()
+                st.rerun()

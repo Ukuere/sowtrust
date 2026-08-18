@@ -1,0 +1,20 @@
+{% extends "agent/base.html" %}
+{% block title %}Become an Agent - SowTrust{% endblock %}
+{% block content %}
+<h1>Become a SowTrust agent</h1>
+<div class="card">
+  <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <label for="name">Full name</label>
+    <input id="name" name="name" autocomplete="name" required>
+    <label for="phone">Phone number</label>
+    <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="08012345678" required>
+    <label for="location">Operating location</label>
+    <input id="location" name="location" autocomplete="address-level2" required>
+    <label for="pin">Four-digit PIN</label>
+    <input id="pin" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required>
+    <button type="submit">Create agent account</button>
+  </form>
+  <p class="muted">Already registered through USSD? <a class="plain" href="{{ url_for('account_activation.activate_agent') }}">Activate your web access</a>.</p>
+</div>
+{% endblock %}

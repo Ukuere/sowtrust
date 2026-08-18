@@ -24,7 +24,7 @@ built for a stateless USSD gateway; a browser can hold a normal signed
 cookie across requests, so there's no gunicorn-multi-worker problem here).
 """
 from functools import wraps
-from flask import Blueprint, render_template, request, redirect, url_for, session, flash
+from flask import Blueprint, current_app, render_template, request, redirect, url_for, session, flash
 
 from app.services import (
     buyer_service, product_service, fee_service, escrow_service,
@@ -61,6 +61,11 @@ def register():
             buyer_type=request.form.get("buyer_type", ""),
         )
         if not result["ok"]:
+            if result.get("activation_required"):
+                flash(result["error"], "success")
+                return redirect(url_for(
+                    "account_activation.activate_buyer", phone=result["phone"]
+                ))
             flash(result["error"], "error")
             return render_template(
                 "buyer/register.html", form=request.form, buyer_types=buyer_service.BUYER_TYPES
@@ -69,9 +74,22 @@ def register():
         verify_url = url_for("buyer_web.verify_email", token=result["verification_token"], _external=True)
         email_service.send_verification_email(result["email"], verify_url)
 
-        session["buyer_phone"] = result["phone"]
-        flash("Account created — check your email to verify your address.", "success")
-        return redirect(url_for("buyer_web.browse"))
+        if current_app.config.get("PHONE_OTP_TEST_BYPASS"):
+            buyer_service.mark_phone_verified_for_test(result["phone"])
+            session["buyer_phone"] = result["phone"]
+            return redirect(url_for("buyer_web.browse"))
+
+        from app.services import identity_service
+        otp = identity_service.request_otp(
+            result["phone"], "BUYER", "ACTIVATE",
+            request.remote_addr or "",
+        )
+        if otp["ok"]:
+            session["activation_phone_BUYER"] = result["phone"]
+            flash("Account created. Verify your phone, then check your email.", "success")
+        else:
+            flash(f"Account created, but the verification code was not delivered: {otp['error']}", "error")
+        return redirect(url_for("account_activation.activate_buyer", phone=result["phone"]))
     return render_template("buyer/register.html", form={}, buyer_types=buyer_service.BUYER_TYPES)
 
 
@@ -94,9 +112,15 @@ def login():
             password=request.form.get("password", ""),
         )
         if not result["ok"]:
+            if result.get("activation_required"):
+                flash(result["error"], "success")
+                return redirect(url_for(
+                    "account_activation.activate_buyer", phone=result["phone"]
+                ))
             flash(result["error"], "error")
             return render_template("buyer/login.html"), 400
         session["buyer_phone"] = result["buyer"]["phone"]
+        session.permanent = True
         return redirect(request.args.get("next") or url_for("buyer_web.browse"))
     return render_template("buyer/login.html")
 
@@ -288,11 +312,13 @@ def order_detail(txn_id):
         flash("Order not found.", "error")
         return redirect(url_for("buyer_web.orders"))
     quote = logistics_service.get_quote_for_order(txn_id)
+    quote_replacement = logistics_service.get_pending_quote_replacement(txn_id)
     dispute = dispute_service.get_dispute_for_order(txn_id)
     return render_template(
         "buyer/order_detail.html",
         order=dict(row),
         quote=quote,
+        quote_replacement=quote_replacement,
         dispute=dispute,
         dispute_reasons=dispute_service.DISPUTE_REASONS,
     )
@@ -315,6 +341,23 @@ def accept_quote(txn_id):
     return redirect(url_for("buyer_web.order_detail", txn_id=txn_id))
 
 
+@buyer_web_bp.post("/orders/<txn_id>/accept-replacement-quote")
+@login_required
+def accept_replacement_quote(txn_id):
+    approval = logistics_service.approve_quote_replacement(
+        txn_id, session["buyer_phone"]
+    )
+    if not approval["ok"]:
+        flash(approval["error"], "error")
+        return redirect(url_for("buyer_web.order_detail", txn_id=txn_id))
+    payment = escrow_service.initiate_payment_for_order(txn_id, session["buyer_phone"])
+    if not payment["ok"]:
+        flash(payment["error"], "error")
+    else:
+        flash("Replacement quote approved. Transfer the exact updated total shown.", "success")
+    return redirect(url_for("buyer_web.order_detail", txn_id=txn_id))
+
+
 @buyer_web_bp.route("/product/<crop>/notify", methods=["POST"])
 @login_required
 def notify_product(crop):
@@ -330,7 +373,7 @@ def notify_product(crop):
     if not result["ok"]:
         flash(result["error"], "error")
     else:
-        flash("We'll notify you when this product is published by a verified farmer.", "success")
+        flash("We'll notify you when this product is published by a farmer.", "success")
     return redirect(url_for("buyer_web.product_detail", crop=crop))
 
 

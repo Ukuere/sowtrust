@@ -23,7 +23,23 @@
     </div>
   {% endif %}
 
-  {% if order.status == 'QUOTE_PENDING' %}
+  {% if quote_replacement %}
+    <div class="card" style="background:#fff9ec; border-color:#f0dfa6; margin-top:16px;">
+      <p style="margin:0 0 6px;"><strong>Replacement delivery quote needs approval</strong></p>
+      <p style="margin:0;">
+        Provider: {{ quote_replacement.provider_name }}<br>
+        Updated logistics: &#8358;{{ "{:,.2f}".format(quote_replacement.proposed_amount) }}<br>
+        Updated final total: &#8358;{{ "{:,.2f}".format(quote_replacement.proposed_buyer_total) }}
+      </p>
+      <p class="muted" style="margin-top:8px;">
+        The original provider became unavailable. Your amount will only change if you approve this replacement.
+      </p>
+      <form method="post" action="{{ url_for('buyer_web.accept_replacement_quote', txn_id=order.txn_id) }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Approve replacement and pay</button>
+      </form>
+    </div>
+  {% elif order.status == 'QUOTE_PENDING' %}
     <p class="muted" style="margin-top:14px;">
       SowTrust Operations is reviewing pickup, destination, quantity, and available verified logistics providers.
       Payment will open after a delivery quote is locked.
@@ -39,12 +55,13 @@
         Accepting this quote locks the checkout amount and generates your Paystack transfer account.
       </p>
       <form method="post" action="{{ url_for('buyer_web.accept_quote', txn_id=order.txn_id) }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <button type="submit">Accept quote and pay</button>
       </form>
     </div>
   {% elif order.status == 'BUYER_ACCEPTED_QUOTE' %}
     <p class="muted" style="margin-top:14px;">Quote accepted. Preparing your payment instructions.</p>
-  {% elif order.status == 'PENDING_PAYMENT' %}
+  {% elif order.status in ['PENDING_PAYMENT', 'PAYMENT_INITIALIZED'] %}
     <div class="card" style="background:#fff9ec; border-color:#f0dfa6; margin-top:16px;">
       <p style="margin:0 0 6px;"><strong>Transfer the exact amount above to:</strong></p>
       <p style="margin:0; font-size:18px;">{{ order.virtual_account_number }} &middot; {{ order.virtual_account_bank }}</p>
@@ -82,6 +99,7 @@
   <div class="card">
     <h2>Report a problem</h2>
     <form method="post" action="{{ url_for('buyer_web.open_dispute', txn_id=order.txn_id) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <label>Reason</label>
       <select name="reason" required style="width:100%; padding:10px; border:1px solid var(--border); border-radius:6px; font-size:15px;">
         {% for reason in dispute_reasons %}

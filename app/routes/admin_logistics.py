@@ -11,7 +11,7 @@ Routes:
   GET  /admin/logistics              -> pending provider verification queue
   POST /admin/logistics/<id>/decide  -> approve or reject one record
 """
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import Blueprint, render_template, request, redirect, url_for, flash, session
 
 from app.services import logistics_service
 from app.routes.admin_auth import require_admin
@@ -26,11 +26,13 @@ admin_logistics_bp = Blueprint(
 def queue():
     pending = logistics_service.get_pending_provider_kyc_verifications()
     quote_requests = logistics_service.get_pending_quote_requests()
+    locked_quotes = logistics_service.get_locked_quotes_for_operations()
     providers = logistics_service.get_verified_providers()
     return render_template(
         "admin/logistics_queue.html",
         pending=pending,
         quote_requests=quote_requests,
+        locked_quotes=locked_quotes,
         providers=providers,
     )
 
@@ -43,7 +45,7 @@ def decide(verification_id):
     result = logistics_service.admin_review_provider_kyc(
         verification_id=verification_id,
         decision=decision,
-        reviewed_by=request.authorization.username or "admin",
+        reviewed_by=session.get("staff_username", "admin"),
         rejection_reason=reason,
     )
     if not result["ok"]:
@@ -66,11 +68,34 @@ def lock_quote(txn_id):
         origin=request.form.get("pickup_location", "").strip(),
         destination=request.form.get("delivery_location", "").strip(),
         logistics_provider_id=request.form.get("logistics_provider_id", "").strip() or None,
-        quoted_by=request.authorization.username or "admin",
+        quoted_by=session.get("staff_username", "admin"),
         expires_at=request.form.get("expires_at", "").strip() or None,
     )
     if not result["ok"]:
         flash(result["error"], "error")
     else:
         flash("Logistics quote locked. Buyer can now accept before payment.", "success")
+    return redirect(url_for("admin_logistics.queue"))
+
+
+@admin_logistics_bp.post("/quotes/<txn_id>/replace-provider")
+@require_admin
+def replace_provider(txn_id):
+    try:
+        amount = float(request.form.get("proposed_amount", "0").replace(",", ""))
+    except ValueError:
+        amount = 0
+    result = logistics_service.request_provider_replacement(
+        txn_id=txn_id,
+        provider_ref=request.form.get("logistics_provider_id", "").strip(),
+        proposed_amount=amount,
+        requested_by=session.get("staff_username", "admin"),
+        reason=request.form.get("reason", "").strip(),
+    )
+    if not result["ok"]:
+        flash(result["error"], "error")
+    elif result["buyer_approval_required"]:
+        flash("Higher replacement quote recorded. Buyer approval is required before payment.", "success")
+    else:
+        flash("Replacement provider applied without changing the locked buyer price.", "success")
     return redirect(url_for("admin_logistics.queue"))

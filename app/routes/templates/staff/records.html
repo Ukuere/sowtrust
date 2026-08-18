@@ -1,0 +1,16 @@
+{% extends "public/base.html" %}
+{% block title %}{{ title }} | SowTrust Operations{% endblock %}
+{% block content %}
+<div class="content wide-content">
+  <div class="page-heading"><div><p class="eyebrow">Operations</p><h1>{{ title }}</h1></div><a class="button outline" href="{{ url_for('staff_auth.admin_home') }}">Back to operations</a></div>
+  <div class="data-table-wrap" role="region" aria-label="{{ title }} records" tabindex="0">
+    <table class="data-table">
+      <thead><tr>{% for column in columns %}<th scope="col">{{ column.replace('_', ' ')|title }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for row in rows %}<tr>{% for column in columns %}<td>{{ row.get(column, '') if row.get(column) is not none else '' }}</td>{% endfor %}</tr>
+      {% else %}<tr><td colspan="{{ columns|length }}">No records found.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

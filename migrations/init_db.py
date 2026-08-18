@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS farmers (
     member_uuid   TEXT    NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
     name          TEXT    NOT NULL,
     phone         TEXT    NOT NULL UNIQUE,
+    normalized_phone TEXT UNIQUE,
+    registration_channel TEXT DEFAULT 'LEGACY',
+    verification_status TEXT DEFAULT 'UNVERIFIED',
+    account_status TEXT DEFAULT 'ACTIVE',
+    phone_verified INTEGER DEFAULT 0,
     crop          TEXT    NOT NULL,
     location      TEXT    NOT NULL,
     pin_hash      TEXT    NOT NULL,
@@ -26,7 +31,9 @@ CREATE TABLE IF NOT EXISTS farmers (
     product_description TEXT,
     quantity_available INTEGER DEFAULT 0,
     product_image_path TEXT,
-    listing_status TEXT DEFAULT 'DRAFT', -- DRAFT | PENDING_REVIEW | PUBLISHED | REJECTED | ARCHIVED
+    listing_status TEXT DEFAULT 'DRAFT', -- DRAFT | PUBLISHED | SOLD | EXPIRED | SUSPENDED
+    image_uploaded_by TEXT,
+    image_uploaded_at TEXT,
     listed_by_agent_phone TEXT,
     listing_submitted_at TEXT,
     listing_published_at TEXT,
@@ -42,6 +49,7 @@ CREATE TABLE IF NOT EXISTS farmers (
     bank_account_name   TEXT,               -- name returned by Paystack account resolution — must match farmer name
     bank_verified_at    TEXT,               -- set only after successful resolve_account_number match
     created_at    TEXT    DEFAULT (datetime('now'))
+    ,updated_at   TEXT    DEFAULT (datetime('now'))
 );
 
 -- ─── PRODUCTS (dynamic catalog — farmers list any crop by name) ────────────
@@ -58,22 +66,57 @@ CREATE TABLE IF NOT EXISTS agents (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT    NOT NULL,
     phone       TEXT    NOT NULL UNIQUE,
+    normalized_phone TEXT UNIQUE,
+    registration_channel TEXT DEFAULT 'LEGACY',
+    verification_status TEXT DEFAULT 'UNVERIFIED',
+    account_status TEXT DEFAULT 'ACTIVE',
+    phone_verified INTEGER DEFAULT 0,
     pin_hash    TEXT    NOT NULL,
     location    TEXT    NOT NULL,
     recruits    INTEGER DEFAULT 0,
     balance     REAL    DEFAULT 0.0,
     is_active   INTEGER DEFAULT 1,
-    created_at  TEXT    DEFAULT (datetime('now'))
+    created_at  TEXT    DEFAULT (datetime('now')),
+    updated_at  TEXT    DEFAULT (datetime('now'))
 );
 
 -- ─── BUYERS ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS buyers (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     phone       TEXT    NOT NULL UNIQUE,
+    normalized_phone TEXT UNIQUE,
+    registration_channel TEXT DEFAULT 'LEGACY',
+    verification_status TEXT DEFAULT 'UNVERIFIED',
+    account_status TEXT DEFAULT 'ACTIVE',
+    phone_verified INTEGER DEFAULT 0,
     name        TEXT,
     pin_hash    TEXT,
+    business_name TEXT,
+    email       TEXT,
+    password_hash TEXT,
+    address     TEXT,
+    delivery_address TEXT,
+    city        TEXT,
+    state       TEXT,
+    buyer_type  TEXT,
+    email_verified INTEGER DEFAULT 0,
+    email_verification_token TEXT,
+    email_verification_sent_at TEXT,
+    id_type     TEXT,
+    id_number   TEXT,
+    id_document_path TEXT,
+    business_reg_number TEXT,
+    business_reg_document_path TEXT,
+    authorized_rep_name TEXT,
+    authorized_rep_id_number TEXT,
+    kyc_status  TEXT DEFAULT 'REGISTERED',
+    kyc_submitted_at TEXT,
+    kyc_reviewed_at TEXT,
+    kyc_rejection_reason TEXT,
+    is_active   INTEGER DEFAULT 1,
     balance     REAL    DEFAULT 0.0,
-    created_at  TEXT    DEFAULT (datetime('now'))
+    created_at  TEXT    DEFAULT (datetime('now')),
+    updated_at  TEXT    DEFAULT (datetime('now'))
 );
 
 -- ─── PLATFORM CONFIG (configurable fee percentages) ────────────────────────
@@ -106,6 +149,20 @@ CREATE TABLE IF NOT EXISTS escrow_ledger (
     farmer_settlement_amount     REAL,   -- what the farmer actually receives
     logistics_settlement_amount  REAL DEFAULT 0,
     sowtrust_total_revenue       REAL,   -- buyer_fee + seller_fee + logistics_fee
+    product_amount_kobo               INTEGER,
+    buyer_platform_fee_kobo           INTEGER,
+    seller_platform_fee_kobo          INTEGER,
+    logistics_amount_kobo             INTEGER DEFAULT 0,
+    logistics_platform_fee_kobo       INTEGER DEFAULT 0,
+    buyer_total_kobo                  INTEGER,
+    farmer_settlement_amount_kobo     INTEGER,
+    logistics_settlement_amount_kobo  INTEGER DEFAULT 0,
+    sowtrust_total_revenue_kobo       INTEGER,
+    amount_paid_kobo                  INTEGER,
+    buyer_name        TEXT,
+    delivery_address  TEXT,
+    delivery_city     TEXT,
+    delivery_state    TEXT,
     release_code_hash TEXT    NOT NULL,
     status            TEXT    NOT NULL DEFAULT 'PENDING_PAYMENT',
                                 -- PENDING_PAYMENT | ESCROW_LOCKED | DELIVERED |
@@ -143,6 +200,11 @@ CREATE TABLE IF NOT EXISTS logistics_providers (
     name            TEXT NOT NULL,
     business_name   TEXT,
     phone           TEXT NOT NULL UNIQUE,
+    normalized_phone TEXT UNIQUE,
+    registration_channel TEXT DEFAULT 'LEGACY',
+    verification_status TEXT DEFAULT 'UNVERIFIED',
+    account_status TEXT DEFAULT 'ACTIVE',
+    phone_verified INTEGER DEFAULT 0,
     email           TEXT,
     address         TEXT,
     operating_area  TEXT,
@@ -158,9 +220,102 @@ CREATE TABLE IF NOT EXISTS logistics_providers (
     is_active       INTEGER DEFAULT 1,
     completed_jobs  INTEGER DEFAULT 0,
     rating          REAL DEFAULT 0.0,
-    created_at      TEXT DEFAULT (datetime('now'))
+    created_at      TEXT DEFAULT (datetime('now')),
+    updated_at      TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_logistics_providers_phone ON logistics_providers(phone);
+
+-- ─── UNIFIED CROSS-CHANNEL IDENTITY ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS users (
+    id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+    normalized_phone           TEXT NOT NULL UNIQUE,
+    full_name                  TEXT,
+    password_hash              TEXT,
+    account_status             TEXT NOT NULL DEFAULT 'ACTIVE',
+    phone_verified             INTEGER NOT NULL DEFAULT 0,
+    first_registration_channel TEXT NOT NULL DEFAULT 'LEGACY',
+    last_login_at              TEXT,
+    created_at                 TEXT DEFAULT (datetime('now')),
+    updated_at                 TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_users_account_status ON users(account_status);
+CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id              INTEGER NOT NULL REFERENCES users(id),
+    role                 TEXT NOT NULL,
+    profile_table        TEXT NOT NULL,
+    profile_record_id    INTEGER,
+    registration_channel TEXT NOT NULL DEFAULT 'LEGACY',
+    verification_status  TEXT NOT NULL DEFAULT 'UNVERIFIED',
+    account_status       TEXT NOT NULL DEFAULT 'ACTIVE',
+    created_at           TEXT DEFAULT (datetime('now')),
+    updated_at           TEXT DEFAULT (datetime('now')),
+    UNIQUE(user_id, role)
+);
+CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role);
+CREATE INDEX IF NOT EXISTS idx_user_roles_channel ON user_roles(registration_channel);
+CREATE INDEX IF NOT EXISTS idx_user_roles_verification ON user_roles(verification_status);
+
+CREATE TABLE IF NOT EXISTS auth_otps (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        INTEGER NOT NULL REFERENCES users(id),
+    role           TEXT NOT NULL,
+    purpose        TEXT NOT NULL,
+    code_hash      TEXT NOT NULL,
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    max_attempts   INTEGER NOT NULL DEFAULT 5,
+    requested_ip   TEXT,
+    expires_at     TEXT NOT NULL,
+    consumed_at    TEXT,
+    created_at     TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_auth_otps_lookup ON auth_otps(user_id, role, purpose, created_at);
+
+CREATE TABLE IF NOT EXISTS identity_migration_issues (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_type       TEXT NOT NULL,
+    role             TEXT,
+    table_name       TEXT,
+    record_id        INTEGER,
+    raw_phone        TEXT,
+    normalized_phone TEXT,
+    details          TEXT,
+    resolved_at      TEXT,
+    created_at       TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS staff_users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role          TEXT NOT NULL DEFAULT 'ADMIN',
+    is_active     INTEGER NOT NULL DEFAULT 1,
+    last_login_at TEXT,
+    created_at    TEXT DEFAULT (datetime('now')),
+    updated_at    TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS request_rate_limits (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    bucket_key  TEXT NOT NULL,
+    occurred_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_request_rate_limits_bucket
+    ON request_rate_limits(bucket_key, occurred_at);
+
+CREATE TABLE IF NOT EXISTS listing_moderation_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    farmer_phone    TEXT NOT NULL,
+    previous_status TEXT,
+    new_status      TEXT NOT NULL,
+    reason          TEXT,
+    actor           TEXT NOT NULL,
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_listing_moderation_farmer
+    ON listing_moderation_log(farmer_phone, created_at);
 
 -- ─── DELIVERY CODE ATTEMPTS (audit trail for every verification try) ───────
 CREATE TABLE IF NOT EXISTS delivery_code_attempts (
@@ -188,6 +343,9 @@ CREATE TABLE IF NOT EXISTS logistics_log (
     quote_amount        REAL,
     platform_fee        REAL,
     settlement_amount   REAL,
+    quote_amount_kobo   INTEGER,
+    platform_fee_kobo   INTEGER,
+    settlement_amount_kobo INTEGER,
     delivery_code_hash     TEXT,
     delivery_code_used_at  TEXT,
     payout_reference       TEXT,
@@ -212,6 +370,9 @@ CREATE TABLE IF NOT EXISTS logistics_quotes (
     commission_rate       REAL DEFAULT 2.5,
     commission_amount     REAL,
     provider_net_amount   REAL,
+    quoted_amount_kobo    INTEGER,
+    commission_amount_kobo INTEGER,
+    provider_net_amount_kobo INTEGER,
     status                TEXT NOT NULL DEFAULT 'PENDING',
     quoted_by             TEXT,
     created_at            TEXT DEFAULT (datetime('now')),
@@ -222,6 +383,36 @@ CREATE TABLE IF NOT EXISTS logistics_quotes (
 );
 CREATE INDEX IF NOT EXISTS idx_logistics_quotes_order ON logistics_quotes(order_id);
 CREATE INDEX IF NOT EXISTS idx_logistics_quotes_status ON logistics_quotes(status);
+
+CREATE TABLE IF NOT EXISTS logistics_quote_replacements (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id                 TEXT NOT NULL REFERENCES escrow_ledger(txn_id),
+    quote_id                 INTEGER NOT NULL REFERENCES logistics_quotes(id),
+    proposed_provider_id     INTEGER NOT NULL REFERENCES logistics_providers(id),
+    proposed_amount          REAL NOT NULL,
+    proposed_amount_kobo     INTEGER NOT NULL,
+    status                   TEXT NOT NULL,
+    requested_by             TEXT NOT NULL,
+    reason                   TEXT,
+    requested_at             TEXT DEFAULT (datetime('now')),
+    buyer_approved_at        TEXT,
+    applied_at               TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_quote_replacements_order
+    ON logistics_quote_replacements(order_id, status);
+
+CREATE TABLE IF NOT EXISTS payment_webhook_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_key    TEXT NOT NULL UNIQUE,
+    event_type   TEXT NOT NULL,
+    reference    TEXT,
+    payload_hash TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'RECEIVED',
+    error        TEXT,
+    received_at  TEXT DEFAULT (datetime('now')),
+    processed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_payment_webhook_status ON payment_webhook_events(status, received_at);
 
 CREATE TABLE IF NOT EXISTS ussd_sessions (
     phone        TEXT PRIMARY KEY,

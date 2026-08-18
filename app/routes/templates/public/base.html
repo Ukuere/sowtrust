@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="SowTrust connects verified agricultural supply, buyers, field agents and logistics with protected payments.">
+  <title>{% block title %}SowTrust{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='site.css') }}">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <a class="brand" href="{{ url_for('public_web.home') }}"><span class="brand-mark">S</span> SowTrust</a>
+  <nav class="site-nav" aria-label="Main navigation">
+    <a href="{{ url_for('public_web.marketplace') }}">Marketplace</a>
+    <a href="{{ url_for('public_web.farmers') }}">Farmers</a>
+    <a href="{{ url_for('public_web.faq') }}">FAQ</a>
+    <a href="{{ url_for('public_web.support') }}">Support</a>
+    <a href="{{ url_for('buyer_web.login') }}">Log in</a>
+  </nav>
+</header>
+<main id="main">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}<div class="content" style="padding-bottom:0">
+      {% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
+    </div>{% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div><h2>SowTrust</h2><p>Trusted agricultural trade, coordinated from listing to delivery.</p></div>
+    <div><h3>Platform</h3><a href="{{ url_for('public_web.marketplace') }}">Marketplace</a><a href="{{ url_for('public_web.farmers') }}">Farmers</a><a href="{{ url_for('public_web.faq') }}">FAQ</a></div>
+    <div><h3>Legal & support</h3><a href="{{ url_for('public_web.support') }}">Contact support</a><a href="{{ url_for('public_web.privacy') }}">Privacy Policy</a><a href="{{ url_for('public_web.terms') }}">Terms and Conditions</a></div>
+  </div>
+</footer>
+</body>
+</html>

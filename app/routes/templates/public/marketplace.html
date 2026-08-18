@@ -1,0 +1,19 @@
+{% extends "public/base.html" %}
+{% block title %}Marketplace | SowTrust{% endblock %}
+{% block content %}
+<section class="band white"><div class="inner">
+  <div class="section-head"><h1>Produce marketplace</h1><p>Browse published supply without exposing farmer contact details. Sign in to place an order or register product interest.</p></div>
+  {% if products %}<div class="product-grid">
+    {% for p in products %}
+    <a class="product-card" href="{{ url_for('buyer_web.product_detail', crop=p.name) }}">
+      <img loading="lazy" src="{% if p.product_image_path %}{{ url_for('product_media.view_product_image', path=p.product_image_path) }}{% else %}{{ url_for('static', filename='img/sowtrust-product-placeholder.png') }}{% endif %}" alt="{{ p.name }} produce listing">
+      <div class="product-body">
+        <h3>{{ p.name }}</h3>
+        <div class="product-meta"><span>{{ p.seller_count }} seller{{ 's' if p.seller_count != 1 else '' }}</span>{% if p.min_price %}<span>From &#8358;{{ "{:,.0f}".format(p.min_price) }}</span>{% endif %}</div>
+        {% if p.verified_seller_count %}<span class="badge">Verified supply available</span>{% else %}<span class="badge pending">Verification pending</span>{% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>{% else %}<div class="notice">There are no published listings right now. Create a buyer account to register what you need.</div>{% endif %}
+</div></section>
+{% endblock %}

@@ -5,6 +5,7 @@
   <h1>Add your payout account</h1>
   <p class="muted">We verify this with Paystack before saving it, so you can confirm it's really yours.</p>
   <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <label>Bank code</label>
     <input type="text" name="bank_code" placeholder="e.g. 058 (GTBank)" required>
 

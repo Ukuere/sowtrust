@@ -35,7 +35,7 @@ def client(tmp_path):
         yield c
 
 
-def ussd(client, text, phone="+2341234567890"):
+def ussd(client, text, phone="+2348012345678"):
     return client.post("/ussd", data={"text": text, "phoneNumber": phone})
 
 
@@ -47,7 +47,7 @@ def test_main_menu(client):
 
 def test_farmer_registration_success(client):
     with patch("app.services.sms_service.send_sms", return_value=True):
-        r = ussd(client, "1*1*John Farmer*Maize*Lagos*1234*1234", phone="+2340000000001")
+        r = ussd(client, "1*1*John Farmer*Maize*Lagos*1234*1234", phone="+2348010000001")
     # Fresh DB — should register successfully
     assert b"Registration Successful" in r.data or b"already exists" in r.data
 
@@ -56,34 +56,34 @@ def test_farmer_registration_custom_product(client):
     # The whole point of the dynamic catalog: any product name works,
     # not just the old hardcoded 7.
     with patch("app.services.sms_service.send_sms", return_value=True):
-        r = ussd(client, "1*1*Amaka*Bitter Leaf*Enugu*1234*1234", phone="+2340000000009")
+        r = ussd(client, "1*1*Amaka*Bitter Leaf*Enugu*1234*1234", phone="+2348010000009")
     assert b"Registration Successful" in r.data
     assert b"Bitter Leaf" in r.data
 
 
 def test_farmer_registration_invalid_product_rejected(client):
     with patch("app.services.sms_service.send_sms", return_value=True):
-        r = ussd(client, "1*1*Tunde*123456*Oyo*1234*1234", phone="+2340000000010")
+        r = ussd(client, "1*1*Tunde*123456*Oyo*1234*1234", phone="+2348010000010")
     assert b"valid product name" in r.data
 
 
 def test_farmer_duplicate_blocked(client):
     with patch("app.services.sms_service.send_sms", return_value=True):
-        ussd(client, "1*1*John Farmer*Maize*Lagos*1234*1234", phone="+2340000000002")
-        r = ussd(client, "1*1*John Again*Maize*Lagos*1234*1234", phone="+2340000000002")
+        ussd(client, "1*1*John Farmer*Maize*Lagos*1234*1234", phone="+2348010000002")
+        r = ussd(client, "1*1*John Again*Maize*Lagos*1234*1234", phone="+2348010000002")
     assert b"already exists" in r.data
 
 
 def test_invalid_pin_mismatch(client):
     with patch("app.services.sms_service.send_sms", return_value=True):
-        r = ussd(client, "1*1*Jane*Rice*Kano*1234*5678", phone="+2340000000003")
+        r = ussd(client, "1*1*Jane*Rice*Kano*1234*5678", phone="+2348010000003")
     assert b"PINs do not match" in r.data
 
 
 def test_buyer_browse_no_farmers(client):
     # Fresh DB, no farmers — system should tell buyer none available
     r = ussd(client, "2*1*Maize", phone="+2349000000001")
-    assert b"No verified sellers" in r.data
+    assert b"No published sellers" in r.data
 
 
 def test_buyer_browse_with_farmers(client):

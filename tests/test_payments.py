@@ -47,15 +47,56 @@ def _register_and_verify_farmer(client, phone, name="Chidi Okafor", crop="Bitter
         ussd(client, f"1*1*{name}*{crop}*Ikorodu*1234*1234", phone=phone)
         ussd(client, f"1*2*1234*{price}", phone=phone)
     from app.models.database import execute
-    execute("UPDATE farmers SET kyc_status='VERIFIED' WHERE phone=?", (phone,))
+    execute(
+        "UPDATE farmers SET kyc_status='VERIFIED', listing_status='PUBLISHED' WHERE phone=?",
+        (phone,),
+    )
+
+
+def _create_and_accept_quote(buyer_phone, farmer_phone, quantity=5, quote_amount=2500):
+    from app.services import escrow_service, logistics_service
+    from app.models.database import execute
+
+    order = escrow_service.create_order_awaiting_quote(
+        buyer_phone=buyer_phone,
+        farmer_phone=farmer_phone,
+        crop="Bitter Leaf",
+        quantity_bags=quantity,
+        product_amount=1500 * quantity,
+        delivery_address="12 Marina Road, Lagos",
+    )
+    assert order["ok"] is True
+    request_result = logistics_service.create_quote_request(
+        order["txn_id"], "Ikorodu", "12 Marina Road, Lagos", requested_by="test"
+    )
+    assert request_result["ok"] is True
+    with patch("app.services.logistics_service.send_sms", return_value=True):
+        provider = logistics_service.register_provider(
+            "+2348055511111", "Payment Test Logistics", "Lagos", "Van", "1234"
+        )
+    assert provider["ok"] is True
+    execute(
+        "UPDATE logistics_providers SET kyc_status='VERIFIED' WHERE phone=?",
+        ("+2348055511111",),
+    )
+    quote = logistics_service.record_quote(
+        order["txn_id"], quote_amount, "Ikorodu", "12 Marina Road, Lagos",
+        logistics_provider_id="+2348055511111", quoted_by="operations-test",
+    )
+    assert quote["ok"] is True
+    accepted = logistics_service.accept_locked_quote(order["txn_id"], buyer_phone)
+    assert accepted["ok"] is True
+    return order["txn_id"]
 
 
 # ── 1. Buyer payment collection ──────────────────────────────────────────
 
 def test_buyer_gets_real_virtual_account_not_instant_lock(client):
-    """The core fix: confirming an order must NOT instantly lock escrow —
-    it must hand the buyer a real account to pay into first."""
+    """Only an accepted logistics quote may initialize buyer payment."""
     _register_and_verify_farmer(client, "+2348033334444")
+    txn_id = _create_and_accept_quote(
+        "+2348099998888", "+2348033334444"
+    )
 
     fake_charge = {
         "ok": True, "account_number": "9876543210",
@@ -64,27 +105,27 @@ def test_buyer_gets_real_virtual_account_not_instant_lock(client):
     with patch("app.services.escrow_service.payment_service.initiate_bank_transfer_charge",
                return_value=fake_charge), \
          patch("app.services.sms_service.send_sms", return_value=True):
-        ussd(client, "2*1*Bitter Leaf", phone="+2348099998888")
-        ussd(client, "2*1*Bitter Leaf*1", phone="+2348099998888")
-        ussd(client, "2*1*Bitter Leaf*1*5", phone="+2348099998888")
-        r = ussd(client, "2*1*Bitter Leaf*1*5*1", phone="+2348099998888")
+        from app.services.escrow_service import initiate_payment_for_order
+        result = initiate_payment_for_order(txn_id, "+2348099998888")
 
-    body = r.data.decode()
-    assert "9876543210" in body
-    assert "Wema Bank" in body
-    assert "reserved once payment lands" in body
+    assert result["ok"] is True
+    assert result["account_number"] == "9876543210"
+    assert result["bank_name"] == "Wema Bank"
 
     from app.models.database import fetchone
     row = fetchone(
-        "SELECT status FROM escrow_ledger WHERE farmer_phone=? ORDER BY locked_at DESC LIMIT 1",
-        ("+2348033334444",)
+        "SELECT status FROM escrow_ledger WHERE txn_id=?",
+        (txn_id,)
     )
-    assert row["status"] == "PENDING_PAYMENT"   # NOT locked yet — money hasn't arrived
+    assert row["status"] == "PAYMENT_INITIALIZED"  # funds have not arrived yet
 
 
 def test_webhook_confirms_payment_and_locks_escrow(client):
     """Simulates Paystack calling our webhook once the buyer's transfer lands."""
     _register_and_verify_farmer(client, "+2348033335555")
+    txn_id = _create_and_accept_quote(
+        "+2348099991111", "+2348033335555"
+    )
 
     fake_charge = {
         "ok": True, "account_number": "1112223334",
@@ -93,10 +134,9 @@ def test_webhook_confirms_payment_and_locks_escrow(client):
     with patch("app.services.escrow_service.payment_service.initiate_bank_transfer_charge",
                return_value=fake_charge), \
          patch("app.services.sms_service.send_sms", return_value=True):
-        ussd(client, "2*1*Bitter Leaf", phone="+2348099991111")
-        ussd(client, "2*1*Bitter Leaf*1", phone="+2348099991111")
-        ussd(client, "2*1*Bitter Leaf*1*5", phone="+2348099991111")
-        ussd(client, "2*1*Bitter Leaf*1*5*1", phone="+2348099991111")
+        from app.services.escrow_service import initiate_payment_for_order
+        payment = initiate_payment_for_order(txn_id, "+2348099991111")
+        assert payment["ok"] is True
 
     from app.models.database import fetchone
     row = fetchone(
@@ -116,7 +156,16 @@ def test_webhook_confirms_payment_and_locks_escrow(client):
     }).encode()
     sig = hmac.new(config.PAYSTACK_SECRET_KEY.encode(), payload, hashlib.sha512).hexdigest()
 
-    with patch("app.services.sms_service.send_sms", return_value=True):
+    verified = {
+        "ok": True,
+        "paid": True,
+        "reference": real_reference,
+        "amount_kobo": int(amount * 100),
+        "currency": "NGN",
+    }
+    with patch("app.services.sms_service.send_sms", return_value=True), \
+         patch("app.routes.webhooks.payment_service.verify_transaction",
+               return_value=verified):
         resp = client.post("/webhooks/paystack", data=payload,
                             headers={"x-paystack-signature": sig,
                                      "Content-Type": "application/json"})

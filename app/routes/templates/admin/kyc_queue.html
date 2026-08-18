@@ -39,7 +39,7 @@
 </head>
 <body>
 <h1>Buyer KYC review queue</h1>
-<p class="muted">Logged in as: type your name as the Basic Auth username so it's recorded against each decision.</p>
+<p class="muted">Every decision is recorded against your authenticated staff account.</p>
 
 {% with messages = get_flashed_messages(with_categories=true) %}
   {% for category, message in messages %}
@@ -63,11 +63,13 @@
       {% endif %}
 
       <form class="inline" method="post" action="{{ url_for('admin_kyc.decide', verification_id=v.id) }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="decision" value="VERIFIED">
         <button type="submit" class="approve">Approve</button>
       </form>
       <form class="inline" method="post" action="{{ url_for('admin_kyc.decide', verification_id=v.id) }}"
             onsubmit="return this.rejection_reason.value.trim().length > 0 || alert('Enter a rejection reason.');">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="decision" value="REJECTED">
         <input type="text" name="rejection_reason" placeholder="Rejection reason">
         <button type="submit" class="reject">Reject</button>

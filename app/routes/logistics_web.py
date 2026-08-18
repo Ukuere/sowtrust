@@ -28,9 +28,8 @@ KYC gate pattern already used on the buyer side.
 from functools import wraps
 from flask import Blueprint, render_template, request, redirect, url_for, session, flash
 
-from app.services import logistics_service, document_storage
-from app.services.buyer_service import normalize_phone
-from app.utils.security import hash_pin, verify_and_upgrade_pin
+from app.services import logistics_service, document_storage, identity_service
+from app.utils.phone import normalize_phone
 
 logistics_web_bp = Blueprint(
     "logistics_web", __name__, url_prefix="/logistics", template_folder="templates"
@@ -61,6 +60,7 @@ def register():
             vehicle_type=request.form.get("vehicle_type", "").strip(),
             pin=request.form.get("pin", "").strip(),
             business_name=request.form.get("business_name", "").strip() or None,
+            registration_channel="WEB",
         )
         if not result["ok"]:
             flash(result["error"], "error")
@@ -76,13 +76,14 @@ def login():
     if request.method == "POST":
         phone = normalize_phone(request.form.get("phone", ""))
         pin = request.form.get("pin", "").strip()
-        provider = logistics_service.get_provider(phone) if phone else None
-        if not provider or not verify_and_upgrade_pin(
-            "logistics_providers", phone, pin, provider["pin_hash"]
-        ):
-            flash("Incorrect phone number or PIN.", "error")
+        result = identity_service.authenticate_role_pin(phone, "LOGISTICS", pin) if phone else {
+            "ok": False, "error": "Enter a valid phone number."
+        }
+        if not result["ok"]:
+            flash(result["error"], "error")
             return render_template("logistics/login.html"), 400
-        session["provider_phone"] = phone
+        session["provider_phone"] = result["phone"]
+        session.permanent = True
         return redirect(request.args.get("next") or url_for("logistics_web.dashboard"))
     return render_template("logistics/login.html")
 

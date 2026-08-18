@@ -79,7 +79,7 @@ def notify_new_product_listing(listing: dict) -> dict:
     notified = 0
     for req in requests:
         message = (
-            f"Sowtrust: {crop} is now available from a verified farmer in "
+            f"SowTrust: {crop} is now available from a published farmer listing in "
             f"{listing.get('location') or 'your market'}. Log in to request a quote."
         )
         ok = notify_sms(

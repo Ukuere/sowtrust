@@ -25,11 +25,13 @@ def client(tmp_path):
     os.environ["DATABASE_PATH"] = test_db
     config.DATABASE_PATH = test_db
     os.environ["UPLOAD_FOLDER"] = str(tmp_path / "uploads")
+    config.UPLOAD_FOLDER = os.environ["UPLOAD_FOLDER"]
     # config is a singleton read once at import time — same reason
     # DATABASE_PATH needs a direct override above rather than just an env
     # var. Your real .env already sets DASHBOARD_PASSWORD, so it's already
     # loaded into `config` by the time this test file's os.environ.setdefault
     # runs — too late to matter. Override the attribute directly instead.
+    config.DASHBOARD_USERNAME = "reviewer"
     config.DASHBOARD_PASSWORD = "test_admin_password"
 
     from migrations.init_db import init_db
@@ -52,6 +54,7 @@ def client(tmp_path):
     from app import create_app
     app = create_app()
     app.config["TESTING"] = True
+    app.config["PHONE_OTP_TEST_BYPASS"] = True
     with app.test_client() as c:
         yield c
 
@@ -62,9 +65,26 @@ def _seed_verified_farmer(phone="+2348033334444", name="Chidi Okafor",
     drive the USSD registration flow to set one up."""
     from app.models.database import execute
     execute(
-        """INSERT INTO farmers (phone, name, crop, location, pin_hash, price, kyc_status, is_active)
-           VALUES (?, ?, ?, 'Ikorodu', 'x', ?, 'VERIFIED', 1)""",
+        """INSERT INTO farmers
+           (phone, name, crop, location, pin_hash, price, kyc_status,
+            verification_status, listing_status, is_active)
+           VALUES (?, ?, ?, 'Ikorodu', 'x', ?, 'VERIFIED', 'VERIFIED', 'PUBLISHED', 1)""",
         (phone, name, crop, price),
+    )
+
+
+def _seed_verified_provider(phone="+2348055511111"):
+    from app.models.database import execute
+    from app.services import logistics_service
+
+    with patch("app.services.logistics_service.send_sms", return_value=True):
+        result = logistics_service.register_provider(
+            phone, "SowTrust Test Logistics", "Lagos", "Van", "1234"
+        )
+    assert result["ok"] is True
+    execute(
+        "UPDATE logistics_providers SET kyc_status='VERIFIED' WHERE phone=?",
+        (phone,),
     )
 
 
@@ -106,7 +126,7 @@ def test_register_creates_account_and_logs_in(client):
 def test_register_rejects_short_password(client):
     resp = client.post("/buyer/register", data=_valid_buyer(password="123"))
     assert resp.status_code == 400
-    assert b"6 characters" in resp.data
+    assert b"8 characters" in resp.data
 
 
 def test_register_rejects_missing_email(client):
@@ -308,6 +328,7 @@ def test_checkout_snapshots_delivery_info_onto_order(client):
 
 def test_buyer_accepts_locked_quote_before_payment_initialization(client):
     _seed_verified_farmer(price=100000)
+    _seed_verified_provider()
     client.post("/buyer/register", data=_valid_buyer())
     _mark_buyer_verified()
 
@@ -318,7 +339,10 @@ def test_buyer_accepts_locked_quote_before_payment_initialization(client):
     from app.models.database import fetchone
     from app.services import logistics_service
     row = fetchone("SELECT * FROM escrow_ledger WHERE buyer_phone = ?", ("+2348011112222",))
-    quote = logistics_service.record_quote(row["txn_id"], 17500, "Ikorodu", "12 Marina Street, Lagos")
+    quote = logistics_service.record_quote(
+        row["txn_id"], 17500, "Ikorodu", "12 Marina Street, Lagos",
+        logistics_provider_id="+2348055511111",
+    )
     assert quote["ok"], quote.get("error")
 
     fake_charge = {"ok": True, "account_number": "9990001111", "bank_name": "Paystack-Titan"}
@@ -331,7 +355,7 @@ def test_buyer_accepts_locked_quote_before_payment_initialization(client):
     paystack.assert_called_once()
 
     updated = fetchone("SELECT * FROM escrow_ledger WHERE txn_id = ?", (row["txn_id"],))
-    assert updated["status"] == "PENDING_PAYMENT"
+    assert updated["status"] == "PAYMENT_INITIALIZED"
     assert updated["buyer_total"] == 120000
     assert updated["payment_reference"] is not None
 
@@ -519,7 +543,7 @@ def test_kyc_submission_rejects_missing_document(client):
         data={"id_type": "National ID (NIN)", "id_number": "12345678901"},
         content_type="multipart/form-data",
     )
-    assert b"Upload a copy of your ID" in resp.data or b"No file was uploaded" in resp.data
+    assert b"Upload a verification document" in resp.data
 
 
 def test_cannot_resubmit_kyc_while_pending(client):
@@ -536,21 +560,22 @@ def test_cannot_resubmit_kyc_while_pending(client):
 
 # ── Admin KYC review (spec sections 2, 3, 7) ──────────────────────────────
 
-def _admin_auth():
-    import base64
-    creds = base64.b64encode(b"reviewer:test_admin_password").decode()
-    return {"Authorization": f"Basic {creds}"}
+def _admin_login(client, password="test_admin_password"):
+    return client.post(
+        "/staff/login",
+        data={"username": "reviewer", "password": password},
+        follow_redirects=False,
+    )
 
 
 def test_admin_queue_requires_auth(client):
     resp = client.get("/admin/kyc/")
-    assert resp.status_code == 401
+    assert resp.status_code == 302
+    assert "/staff/login" in resp.headers["Location"]
 
 
 def test_admin_queue_rejects_wrong_password(client):
-    import base64
-    creds = base64.b64encode(b"reviewer:wrong_password").decode()
-    resp = client.get("/admin/kyc/", headers={"Authorization": f"Basic {creds}"})
+    resp = _admin_login(client, "wrong_password")
     assert resp.status_code == 401
 
 
@@ -560,7 +585,8 @@ def test_admin_queue_shows_pending_submission(client):
         "id_type": "National ID (NIN)", "id_number": "12345678901", "id_document": _fake_pdf(),
     }, content_type="multipart/form-data")
 
-    resp = client.get("/admin/kyc/", headers=_admin_auth())
+    assert _admin_login(client).status_code == 302
+    resp = client.get("/admin/kyc/")
     assert resp.status_code == 200
     assert b"Amaka Buyer" in resp.data
     assert b"12345678901" in resp.data
@@ -578,10 +604,10 @@ def test_admin_approve_unlocks_checkout(client):
         "SELECT * FROM kyc_verifications WHERE user_id = ? AND user_type = 'buyer'",
         ("+2348011112222",),
     )
+    assert _admin_login(client).status_code == 302
     resp = client.post(
         f"/admin/kyc/{record['id']}/decide",
         data={"decision": "VERIFIED"},
-        headers=_admin_auth(),
         follow_redirects=True,
     )
     assert resp.status_code == 200
@@ -589,6 +615,10 @@ def test_admin_approve_unlocks_checkout(client):
     from app.services.buyer_service import get_buyer
     assert get_buyer("+2348011112222")["kyc_status"] == "VERIFIED"
 
+    client.post(
+        "/buyer/login",
+        data={"phone": "08011112222", "password": "secure123"},
+    )
     checkout_resp = client.get("/buyer/checkout/+2348033334444/Bitter Leaf")
     assert checkout_resp.status_code == 200
     assert b"Confirm your order" in checkout_resp.data
@@ -605,10 +635,10 @@ def test_admin_reject_requires_reason_and_keeps_buyer_blocked(client):
         "SELECT * FROM kyc_verifications WHERE user_id = ? AND user_type = 'buyer'",
         ("+2348011112222",),
     )
+    assert _admin_login(client).status_code == 302
     resp = client.post(
         f"/admin/kyc/{record['id']}/decide",
         data={"decision": "REJECTED", "rejection_reason": "Document unreadable"},
-        headers=_admin_auth(),
         follow_redirects=True,
     )
     assert resp.status_code == 200
@@ -618,6 +648,10 @@ def test_admin_reject_requires_reason_and_keeps_buyer_blocked(client):
     assert buyer["kyc_status"] == "REJECTED"
     assert buyer["kyc_rejection_reason"] == "Document unreadable"
 
+    client.post(
+        "/buyer/login",
+        data={"phone": "08011112222", "password": "secure123"},
+    )
     checkout_resp = client.get(
         "/buyer/checkout/+2348033334444/Bitter Leaf", follow_redirects=True
     )
@@ -635,9 +669,10 @@ def test_cannot_review_same_record_twice(client):
         "SELECT * FROM kyc_verifications WHERE user_id = ? AND user_type = 'buyer'",
         ("+2348011112222",),
     )
+    assert _admin_login(client).status_code == 302
     client.post(f"/admin/kyc/{record['id']}/decide", data={"decision": "VERIFIED"},
-                headers=_admin_auth())
+                )
     resp = client.post(f"/admin/kyc/{record['id']}/decide", data={"decision": "REJECTED",
-                        "rejection_reason": "too late"}, headers=_admin_auth(),
+                        "rejection_reason": "too late"},
                         follow_redirects=True)
     assert b"already been reviewed" in resp.data

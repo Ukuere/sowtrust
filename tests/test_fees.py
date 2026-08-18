@@ -121,16 +121,16 @@ def test_fee_percent_is_configurable_not_hardcoded(client):
 
 
 def test_buyer_now_actually_charged_the_fee_end_to_end(client):
-    """Regression test for the bug we found live: the USSD summary screen
-    used to SHOW a fee-inclusive total but only ever charge the buyer the
-    raw product amount. This confirms the real charge now matches what's
-    displayed — the buyer is genuinely charged buyer_total."""
+    """USSD must request a quote first, then charge the locked final total."""
     from unittest.mock import patch
-    from app.models.database import execute
+    from app.models.database import execute, fetchone
+    from app.services import escrow_service, logistics_service
 
     execute(
-        """INSERT INTO farmers (phone, name, crop, location, pin_hash, price, kyc_status)
-           VALUES ('+2348011110000','Test Farmer','Maize','Lagos','x',25000,'VERIFIED')"""
+        """INSERT INTO farmers
+           (phone, name, crop, location, pin_hash, price, kyc_status, listing_status)
+           VALUES
+           ('+2348011110000','Test Farmer','Maize','Lagos','x',25000,'VERIFIED','PUBLISHED')"""
     )
 
     captured = {}
@@ -149,8 +149,40 @@ def test_buyer_now_actually_charged_the_fee_end_to_end(client):
         ussd("2*1*Maize")
         ussd("2*1*Maize*1")
         ussd("2*1*Maize*1*2")   # 2 bags @ 25,000 = 50,000 product amount
-        ussd("2*1*Maize*1*2*1")  # confirm
+        ussd("2*1*Maize*1*2*Lagos")
+        response = ussd("2*1*Maize*1*2*Lagos*1")  # request quote
 
-    # 2 bags * 25,000 = 50,000 product. Buyer fee 2.5% = 1,250. Buyer should
-    # be charged 51,250 — NOT the old buggy 50,000.
-    assert captured["amount_charged"] == 51250
+        assert b"Quote requested" in response.data
+        assert "amount_charged" not in captured
+
+        order = fetchone(
+            "SELECT * FROM escrow_ledger WHERE buyer_phone=? ORDER BY id DESC LIMIT 1",
+            ("+2348099990000",),
+        )
+        assert order["status"] == "QUOTE_PENDING"
+
+        with patch("app.services.logistics_service.send_sms", return_value=True):
+            provider = logistics_service.register_provider(
+                "+2348055512345", "Fee Test Logistics", "Lagos", "Van", "1234"
+            )
+        assert provider["ok"] is True
+        execute(
+            "UPDATE logistics_providers SET kyc_status='VERIFIED' WHERE phone=?",
+            ("+2348055512345",),
+        )
+        quote = logistics_service.record_quote(
+            order["txn_id"], 17500, "Lagos", "Lagos",
+            logistics_provider_id="+2348055512345", quoted_by="operations-test"
+        )
+        assert quote["ok"] is True
+        accepted = logistics_service.accept_locked_quote(
+            order["txn_id"], "+2348099990000"
+        )
+        assert accepted["ok"] is True
+        payment = escrow_service.initiate_payment_for_order(
+            order["txn_id"], "+2348099990000"
+        )
+        assert payment["ok"] is True
+
+    # 50,000 goods + 1,250 buyer fee + 17,500 locked delivery quote.
+    assert captured["amount_charged"] == 68750

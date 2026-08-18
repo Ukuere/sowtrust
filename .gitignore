@@ -9,3 +9,5 @@ venv/
 ngrok/
 *.exe
 .DS_Store
+.pytest_tmp/
+uploads/

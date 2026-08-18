@@ -4,6 +4,7 @@
 <div class="card">
   <h1>Log in</h1>
   <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <label>Phone number</label>
     <input type="tel" name="phone" placeholder="08011112222" required>
 
@@ -15,5 +16,6 @@
   <p class="muted" style="margin-top:14px;">
     New here? <a class="plain" href="{{ url_for('logistics_web.register') }}">Register</a>
   </p>
+  <p class="muted">Registered through USSD? <a class="plain" href="{{ url_for('account_activation.activate_logistics') }}">Activate passwordless web access</a>.</p>
 </div>
 {% endblock %}

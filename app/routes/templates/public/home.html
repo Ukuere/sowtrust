@@ -1,0 +1,65 @@
+{% extends "public/base.html" %}
+{% block title %}SowTrust | Trusted agricultural trade{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="hero-inner">
+    <span class="eyebrow">Agricultural marketplace and protected settlement</span>
+    <h1>SowTrust</h1>
+    <p>Buy and move farm produce with verified identities, operations-assisted logistics quotes and payment protection through delivery.</p>
+    <div class="actions">
+      <a class="button" href="{{ url_for('public_web.marketplace') }}">Browse marketplace</a>
+      <a class="button secondary" href="#portals">Choose your portal</a>
+    </div>
+  </div>
+</section>
+
+<section class="band white" id="portals">
+  <div class="inner">
+    <div class="section-head"><h2>Enter SowTrust</h2><p>Use the portal that matches your role. All activity is connected to the same SowTrust account and transaction system.</p></div>
+    <div class="role-grid">
+      <article class="role-card"><div class="role-code">B</div><h3>Buyers</h3><p>Discover produce, request logistics, accept the final quote and track protected orders.</p><div class="links"><a href="{{ url_for('public_web.marketplace') }}">Browse marketplace</a><a href="{{ url_for('buyer_web.register') }}">Create buyer account</a><a href="{{ url_for('buyer_web.login') }}">Buyer login</a><a href="{{ url_for('public_web.track_orders') }}">Track orders</a></div></article>
+      <article class="role-card"><div class="role-code">F</div><h3>Farmers</h3><p>Register and publish produce from any supported phone, then receive updates by SMS.</p><div class="links"><a href="{{ url_for('public_web.farmers') }}">How it works for farmers</a><a href="{{ url_for('public_web.support') }}">Contact support</a></div></article>
+      <article class="role-card"><div class="role-code">A</div><h3>Agents</h3><p>Support farmer onboarding, add genuine product media and help operations maintain trusted listings.</p><div class="links"><a href="{{ url_for('account_activation.activate_agent') }}">Become or activate an agent</a><a href="{{ url_for('agent_web.login') }}">Agent login</a><a href="{{ url_for('agent_web.dashboard') }}">Agent dashboard</a></div></article>
+      <article class="role-card"><div class="role-code">L</div><h3>Logistics providers</h3><p>Register your delivery business, submit verification and manage eligible delivery jobs.</p><div class="links"><a href="{{ url_for('logistics_web.register') }}">Register as a provider</a><a href="{{ url_for('account_activation.activate_logistics') }}">Activate an existing account</a><a href="{{ url_for('logistics_web.login') }}">Logistics login</a></div></article>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="inner">
+    <div class="section-head"><h2>Produce available now</h2><p>Published listings appear immediately. Verification badges help buyers understand the current trust status.</p></div>
+    {% if products %}<div class="product-grid">
+      {% for p in products %}
+      <a class="product-card" href="{{ url_for('public_web.marketplace') }}">
+        <img loading="lazy" src="{% if p.product_image_path %}{{ url_for('product_media.view_product_image', path=p.product_image_path) }}{% else %}{{ url_for('static', filename='img/sowtrust-product-placeholder.png') }}{% endif %}" alt="{{ p.name }} produce listing">
+        <div class="product-body"><h3>{{ p.name }}</h3><div class="product-meta"><span>{{ p.seller_count }} seller{{ 's' if p.seller_count != 1 else '' }}</span>{% if p.min_price %}<span>From &#8358;{{ "{:,.0f}".format(p.min_price) }}</span>{% endif %}</div></div>
+      </a>
+      {% endfor %}
+    </div>{% else %}<div class="notice">New produce is being added. Buyers can create an account now and register their interest.</div>{% endif %}
+  </div>
+</section>
+
+<section class="band dark">
+  <div class="inner">
+    <div class="section-head"><h2>How an order works</h2><p>The payable amount is fixed only after the buyer sees and accepts the logistics quote.</p></div>
+    <div class="steps-grid">
+      <div class="step"><strong>1. Select produce</strong><p>Choose a published product and confirm the required quantity and delivery destination.</p></div>
+      <div class="step"><strong>2. Receive logistics quote</strong><p>SowTrust Operations coordinates a quote from an eligible provider.</p></div>
+      <div class="step"><strong>3. Accept and pay</strong><p>The buyer accepts the final total before Paystack payment is initialized.</p></div>
+      <div class="step"><strong>4. Confirm delivery</strong><p>Delivery codes and server-confirmed payment states protect settlement.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="band white">
+  <div class="inner">
+    <div class="section-head"><h2>Trust is visible</h2><p>Registration, verification and listing publication are separate states. This keeps the market open while making risk clear.</p></div>
+    <div class="trust-grid">
+      <article class="trust-item"><h3>Identity checks</h3><p>Phone identity connects USSD and web activity. KYC status remains visible to operations and buyers.</p></article>
+      <article class="trust-item"><h3>Protected documents</h3><p>KYC files are stored behind staff authorization and are never linked from public marketplace pages.</p></article>
+      <article class="trust-item"><h3>Locked quotes</h3><p>A buyer-approved logistics quote cannot change silently after payment initialization.</p></article>
+      <article class="trust-item"><h3>Audited decisions</h3><p>Moderation, payment and settlement changes create an operations audit trail.</p></article>
+    </div>
+  </div>
+</section>
+{% endblock %}
