@@ -17,10 +17,12 @@
   </a>
   <nav class="site-nav" aria-label="Main navigation">
     <a href="{{ url_for('public_web.marketplace') }}">Marketplace</a>
+    <a href="{{ url_for('buyer_web.login') }}">Buyers</a>
     <a href="{{ url_for('public_web.farmers') }}">Farmers</a>
+    <a href="{{ url_for('agent_web.login') }}">Agents</a>
+    <a href="{{ url_for('logistics_web.login') }}">Logistics</a>
     <a href="{{ url_for('public_web.faq') }}">FAQ</a>
     <a href="{{ url_for('public_web.support') }}">Support</a>
-    <a href="{{ url_for('buyer_web.login') }}">Log in</a>
   </nav>
 </header>
 <main id="main">
