@@ -39,8 +39,18 @@ img { display: block; max-width: 100%; }
   top: 0;
   z-index: 20;
 }
-.brand { color: var(--forest); text-decoration: none; font-size: 22px; font-weight: 800; }
-.brand-mark { color: var(--gold); }
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--forest);
+  text-decoration: none;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+.brand-logo { width: 36px; height: 36px; flex: 0 0 36px; object-fit: contain; }
 .site-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; }
 .site-nav a { text-decoration: none; font-size: 14px; font-weight: 650; }
 .site-nav a:hover, .site-nav a:focus { color: var(--leaf); }
