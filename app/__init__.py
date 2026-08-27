@@ -25,6 +25,7 @@ from app.routes.account_activation import account_activation_bp
 from app.routes.staff_auth import staff_auth_bp
 from app.routes.internal_dashboard import internal_dashboard_bp
 from app.routes.admin_operations import admin_operations_bp
+from app.routes.admin_incentives import admin_incentives_bp
 from app.utils.csrf import csrf_token, protect_request
 from app.models.database import get_db
 
@@ -139,6 +140,7 @@ def create_app() -> Flask:
     app.register_blueprint(staff_auth_bp)
     app.register_blueprint(internal_dashboard_bp)
     app.register_blueprint(admin_operations_bp)
+    app.register_blueprint(admin_incentives_bp)
     app.register_blueprint(public_web_bp)
 
     @app.get("/health")

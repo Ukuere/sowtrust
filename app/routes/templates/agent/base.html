@@ -51,8 +51,20 @@
   .flash.success { background: #e3f3e8; color: #1c6b3c; }
   .flash.error { background: #fbe8e6; color: #a4342a; }
   .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+  .section-title { margin: 28px 0 6px; }
+  .earnings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
+  .metric { min-height: 92px; padding: 14px; background: rgba(255,255,255,.92); border: 1px solid var(--border); border-radius: 8px; }
+  .metric span, .metric small { display: block; color: var(--muted); font-size: 12px; }
+  .metric strong { display: block; margin-top: 10px; color: var(--green-dark); font-size: 17px; }
+  .payout-note { border-left: 4px solid #d6a52a; }
+  .activity-row { display: flex; justify-content: space-between; gap: 20px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .activity-row:last-child { border-bottom: 0; }
+  .activity-row small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+  .activity-amount { flex: 0 0 auto; color: var(--green); font-weight: 700; text-align: right; }
+  .activity-amount.negative { color: #a4342a; }
   .muted { color: var(--muted); font-size: 13px; }
   a.plain { color: var(--green-dark); }
+  @media (max-width: 620px) { .earnings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .activity-row { gap: 10px; } }
 </style>
 </head>
 <body>

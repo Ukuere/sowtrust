@@ -36,6 +36,7 @@ from app.services.product_service import (
     get_or_create_product, list_active_products, find_farmers_for_product
 )
 from app.services import buyer_service, identity_service, notification_service
+from app.services.agent_incentive_service import AgentIncentiveService
 from app.utils.phone import normalize_phone
 from config.settings import config
 
@@ -984,22 +985,11 @@ def ussd_handler():
                         f"Farmer not found.\n"
                         f"Ask them to register first via *709# > 1 > 1."
                     )
-                with get_db() as conn:
-                    conn.execute(
-                        """UPDATE farmers
-                           SET kyc_status='VERIFIED', verification_status='VERIFIED',
-                               updated_at=datetime('now')
-                           WHERE id=?""",
-                        (farmer["id"],)
-                    )
-                    conn.execute(
-                        "UPDATE agents SET recruits = recruits + 1 WHERE phone=?",
-                        (phone,)
-                    )
-                    conn.execute(
-                        "INSERT INTO audit_log(actor,action,details) VALUES(?,?,?)",
-                        (phone, "KYC_VERIFIED", f"Farmer:{farmer_phone}")
-                    )
+                verified = AgentIncentiveService.record_farmer_verification(
+                    phone, farmer_phone, actor=phone
+                )
+                if not verified["ok"]:
+                    return END(verified["error"])
                 send_sms(
                     farmer_phone,
                     f"Sowtrust: {farmer['name']}, your account is VERIFIED!\n"
@@ -1017,11 +1007,13 @@ def ussd_handler():
                 agent = _agent(phone)
                 if not agent or not verify_and_upgrade_pin("agents", phone, steps[2], agent["pin_hash"]):
                     return END("Invalid PIN.")
+                earnings = AgentIncentiveService.get_agent_summary(agent["id"])
                 return END(
                     f"Agent: {agent['name']}\n"
                     f"Location: {agent['location']}\n"
                     f"Farmers Verified: {agent['recruits']}\n"
-                    f"Balance: NGN {agent['balance']:,.0f}"
+                    f"Approved Earnings: NGN {earnings.get('approved_kobo', 0) / 100:,.0f}\n"
+                    f"Paid to Date: NGN {earnings.get('paid_kobo', 0) / 100:,.0f}"
                 )
 
         # 6.4 Verify a logistics provider — same trust model as farmers.

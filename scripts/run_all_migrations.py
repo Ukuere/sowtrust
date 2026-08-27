@@ -29,6 +29,7 @@ MIGRATIONS = [
     "migrations.add_production_mvp_workflows",
     "migrations.add_payment_integrity",
     "migrations.add_unified_identity",
+    "migrations.add_agent_incentives",
 ]
 
 

@@ -489,6 +489,9 @@ def init_db():
             INSERT OR IGNORE INTO platform_config (id, buyer_fee_percent, seller_fee_percent, logistics_fee_percent)
             VALUES (1, 2.5, 2.5, 2.5)
         """)
+    # Keep fresh test/development databases aligned with production migrations.
+    from migrations.add_agent_incentives import migrate as migrate_agent_incentives
+    migrate_agent_incentives()
     print("[Sowtrust] ✅ Database schema created successfully.")
 
 

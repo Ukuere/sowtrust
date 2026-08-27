@@ -821,19 +821,24 @@ def confirm_payout_success(transfer_code: str) -> dict:
         return {"ok": False, "error": "Unknown logistics transfer reference"}
 
     with get_db() as conn:
-        conn.execute(
-            "UPDATE logistics_log SET payout_status='success' WHERE id=?", (log["id"],)
-        )
-        conn.execute(
-            "UPDATE logistics_providers SET completed_jobs = completed_jobs + 1 WHERE id=?",
-            (log["provider_id"],),
-        )
+        changed = conn.execute(
+            """UPDATE logistics_log SET payout_status='success'
+               WHERE id=? AND COALESCE(payout_status, '')!='success'""",
+            (log["id"],),
+        ).rowcount
+        if changed:
+            conn.execute(
+                "UPDATE logistics_providers SET completed_jobs = completed_jobs + 1 WHERE id=?",
+                (log["provider_id"],),
+            )
     provider = fetchone("SELECT * FROM logistics_providers WHERE id=?", (log["provider_id"],))
     if provider:
         send_sms(provider["phone"],
                  f"Sowtrust: NGN {log['settlement_amount']:,.0f} has been paid to your "
                  f"account for TXN {log['txn_id']}.")
-    return {"ok": True}
+    from app.services.agent_incentive_service import AgentIncentiveService
+    completion = AgentIncentiveService.evaluate_completed_order(log["txn_id"])
+    return {"ok": True, "completion": completion}
 
 
 def mark_payout_failed(transfer_code: str, reason: str) -> dict:
@@ -848,6 +853,11 @@ def mark_payout_failed(transfer_code: str, reason: str) -> dict:
         conn.execute(
             "INSERT INTO audit_log (actor, action, details) VALUES (?, ?, ?)",
             ("system", "LOGISTICS_PAYOUT_FAILED", f"TXN:{log['txn_id']} REASON:{reason}"),
+        )
+    if "reversed" in (reason or "").lower():
+        from app.services.agent_incentive_service import AgentIncentiveService
+        AgentIncentiveService.reverse_order_incentives(
+            log["txn_id"], reason="Logistics settlement was reversed"
         )
     return {"ok": True}
 

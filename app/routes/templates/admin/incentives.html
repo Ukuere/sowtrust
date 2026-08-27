@@ -1,0 +1,77 @@
+{% extends "public/base.html" %}
+{% block title %}Agent Incentives | SowTrust{% endblock %}
+{% block content %}
+<div class="content wide-content">
+  <div class="page-heading">
+    <div><h1>Agent Incentive Ledger</h1><p>Review milestone earnings and prepare periodic, manual payouts.</p></div>
+    <a class="button outline" href="{{ url_for('staff_auth.admin_home') }}">Operations home</a>
+  </div>
+
+  <section class="admin-section">
+    <h2>Review earnings</h2>
+    <form class="filter-bar" method="get">
+      <select name="agent_id" aria-label="Filter by agent"><option value="">All agents</option>{% for agent in agents %}<option value="{{ agent.id }}"{% if filters.agent_id == agent.id %} selected{% endif %}>{{ agent.name }} - {{ agent.phone }}</option>{% endfor %}</select>
+      <select name="farmer_id" aria-label="Filter by farmer"><option value="">All farmers</option>{% for farmer in farmers %}<option value="{{ farmer.id }}"{% if filters.farmer_id == farmer.id %} selected{% endif %}>{{ farmer.name }} - {{ farmer.phone }}</option>{% endfor %}</select>
+      <select name="status" aria-label="Filter by status"><option value="">All statuses</option>{% for value in ['PENDING','UNDER_REVIEW','APPROVED','REJECTED','PAYABLE','PAID','REVERSED'] %}<option value="{{ value }}"{% if filters.status == value %} selected{% endif %}>{{ value|replace('_', ' ')|title }}</option>{% endfor %}</select>
+      <select name="incentive_code" aria-label="Filter by incentive"><option value="">All incentives</option>{% for policy in policies %}<option value="{{ policy.incentive_code }}"{% if filters.incentive_code == policy.incentive_code %} selected{% endif %}>{{ policy.name }}</option>{% endfor %}</select>
+      <label class="check-control"><input type="checkbox" name="flagged" value="1"{% if filters.flagged %} checked{% endif %}> Flagged only</label>
+      <button class="button" type="submit">Apply filters</button>
+    </form>
+    <div class="data-table-wrap">
+      <table class="data-table incentive-table">
+        <thead><tr><th>Created</th><th>Agent</th><th>Farmer</th><th>Milestone</th><th>Amount</th><th>Status</th><th>Risk</th><th>Action</th></tr></thead>
+        <tbody>
+        {% for entry in entries %}
+          <tr>
+            <td>{{ entry.created_at }}</td><td>{{ entry.agent_name }}<br><small>{{ entry.agent_phone }}</small></td><td>{{ entry.farmer_name or '-' }}<br><small>{{ entry.farmer_phone or '' }}</small></td>
+            <td>{{ entry.description }}{% if entry.order_id %}<br><small>Order {{ entry.order_id }}</small>{% endif %}</td><td>{{ naira(entry.amount_kobo) }}</td><td><span class="status-tag">{{ entry.status|replace('_', ' ') }}</span></td><td>{{ entry.risk_flags if entry.risk_flags != '[]' else '-' }}</td>
+            <td class="action-cell">
+              {% if entry.status in ['PENDING','UNDER_REVIEW'] %}<form method="post" action="{{ url_for('admin_incentives.approve_entry', entry_id=entry.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button type="submit">Approve</button></form>{% endif %}
+              {% if entry.status in ['PENDING','UNDER_REVIEW','APPROVED'] %}<form method="post" action="{{ url_for('admin_incentives.reject_entry', entry_id=entry.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Rejection reason" required><button class="danger-button" type="submit">Reject</button></form>{% endif %}
+              {% if can_manage_payouts and entry.status not in ['REJECTED','REVERSED'] %}<form method="post" action="{{ url_for('admin_incentives.reverse_entry', entry_id=entry.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Reversal reason" required><button class="danger-button" type="submit">Reverse</button></form>{% endif %}
+            </td>
+          </tr>
+        {% else %}<tr><td colspan="8">No incentive entries match these filters.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="admin-section">
+    <h2>Incentive policies</h2>
+    <div class="policy-grid">
+      {% for policy in policies %}
+      <form class="policy-panel" method="post" action="{{ url_for('admin_incentives.update_policy', policy_id=policy.id) }}">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <h3>{{ policy.name }}</h3><p>{{ policy.description }}</p>
+        <label>Amount (NGN)<input name="amount" type="number" min="0" step="0.01" value="{{ '%.2f'|format(policy.amount_kobo / 100) }}"{% if not can_manage_payouts %} disabled{% endif %}></label>
+        <label>Retention transaction count<input name="qualifying_transaction_count" type="number" min="1" value="{{ policy.qualifying_transaction_count or '' }}"{% if not can_manage_payouts %} disabled{% endif %}></label>
+        <label>Retention period (days)<input name="qualifying_period_days" type="number" min="1" value="{{ policy.qualifying_period_days or '' }}"{% if not can_manage_payouts %} disabled{% endif %}></label>
+        <label class="check-control"><input type="checkbox" name="enabled" value="1"{% if policy.enabled %} checked{% endif %}{% if not can_manage_payouts %} disabled{% endif %}> Enabled</label>
+        <label class="check-control"><input type="checkbox" name="requires_admin_review" value="1"{% if policy.requires_admin_review %} checked{% endif %}{% if not can_manage_payouts %} disabled{% endif %}> Admin review required</label>
+        {% if can_manage_payouts %}<button class="button" type="submit">Update policy</button>{% endif %}
+      </form>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="admin-section">
+    <h2>Payout batches</h2>
+    {% if can_manage_payouts %}
+    <form class="filter-bar" method="post" action="{{ url_for('admin_incentives.create_batch') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <label>Period start<input type="date" name="period_start" required></label><label>Period end<input type="date" name="period_end" required></label>
+      <label>Frequency<select name="frequency"><option>WEEKLY</option><option>BIWEEKLY</option><option>MONTHLY</option><option>CUSTOM</option></select></label>
+      <label>Notes<input name="notes" placeholder="Optional batch note"></label><button class="button" type="submit">Create draft batch</button>
+    </form>
+    {% endif %}
+    <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Batch</th><th>Period</th><th>Agents</th><th>Total</th><th>Status</th><th>Reference</th><th>Action</th></tr></thead><tbody>
+      {% for batch in batches %}<tr><td>#{{ batch.id }}<br><small>{{ batch.frequency }}</small></td><td>{{ batch.period_start }} to {{ batch.period_end }}</td><td>{{ batch.agent_count }}</td><td>{{ naira(batch.total_amount_kobo) }}</td><td>{{ batch.status }}</td><td>{{ batch.payment_reference or '-' }}</td><td class="action-cell">
+        {% if can_manage_payouts and batch.status in ['DRAFT','UNDER_REVIEW'] %}<form method="post" action="{{ url_for('admin_incentives.approve_batch', batch_id=batch.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button type="submit">Approve batch</button></form>{% endif %}
+        {% if can_manage_payouts and batch.status in ['APPROVED','PROCESSING'] %}<form method="post" action="{{ url_for('admin_incentives.mark_batch_paid', batch_id=batch.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input name="payment_reference" placeholder="Payment reference" required><button type="submit">Confirm paid</button></form>{% endif %}
+        {% if can_manage_payouts and batch.status not in ['PAID','FAILED','CANCELLED'] %}<form method="post" action="{{ url_for('admin_incentives.mark_batch_failed', batch_id=batch.id) }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Failure reason" required><button class="danger-button" type="submit">Mark failed</button></form>{% endif %}
+      </td></tr>{% else %}<tr><td colspan="7">No payout batches have been created.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+</div>
+{% endblock %}

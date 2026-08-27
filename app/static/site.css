@@ -147,6 +147,24 @@ img { display: block; max-width: 100%; }
 .flash { margin: 0 0 14px; padding: 11px 13px; border-radius: 6px; }
 .flash.success { background: #e5f2e9; color: var(--forest); }
 .flash.error { background: #f9e4e2; color: var(--danger); }
+.admin-section { margin-top: 34px; }
+.filter-bar { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 0 0 14px; padding: 14px; background: var(--white); border: 1px solid var(--line); border-radius: 8px; }
+.filter-bar label { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
+.filter-bar input, .filter-bar select, .filter-bar > select { min-height: 40px; padding: 7px 9px; border: 1px solid #b8c3ba; border-radius: 6px; background: white; font: inherit; }
+.filter-bar .button { min-height: 40px; padding: 7px 14px; }
+.check-control { display: inline-flex !important; grid-auto-flow: column; align-items: center; justify-content: start; gap: 7px !important; }
+.check-control input { width: 18px !important; min-height: 18px !important; margin: 0; }
+.policy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.policy-panel { padding: 18px; background: var(--white); border: 1px solid var(--line); border-radius: 8px; }
+.policy-panel h3 { margin: 0 0 5px; }
+.policy-panel p { min-height: 44px; margin: 0 0 10px; font-size: 14px; }
+.policy-panel label { display: grid; gap: 4px; margin-top: 10px; color: var(--muted); font-size: 13px; }
+.policy-panel input { min-height: 40px; padding: 7px 9px; border: 1px solid #b8c3ba; border-radius: 6px; font: inherit; }
+.status-tag { display: inline-block; padding: 3px 7px; border-radius: 4px; background: #e5f2e9; color: var(--forest); font-size: 11px; font-weight: 750; text-transform: uppercase; }
+.action-cell form { display: flex; gap: 5px; margin: 3px 0; }
+.action-cell input { width: 150px; min-height: 32px; padding: 5px 7px; border: 1px solid #b8c3ba; border-radius: 4px; }
+.action-cell button { min-height: 32px; padding: 5px 8px; border: 0; border-radius: 4px; color: white; background: var(--leaf); cursor: pointer; }
+.action-cell .danger-button { background: var(--danger); }
 
 .site-footer { padding: 36px 20px; background: #10271c; color: #dbe7df; }
 .footer-inner { width: min(1180px, 100%); margin: 0 auto; display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 30px; }
@@ -166,4 +184,5 @@ img { display: block; max-width: 100%; }
   .hero p { font-size: 17px; }
   .role-grid, .product-grid, .trust-grid, .steps-grid, .footer-inner { grid-template-columns: 1fr; }
   .band { padding: 48px 20px; }
+  .policy-grid { grid-template-columns: 1fr; }
 }

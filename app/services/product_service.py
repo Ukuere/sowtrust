@@ -182,6 +182,10 @@ def submit_agent_product_listing(agent_phone: str, farmer_phone: str, crop: str,
                VALUES (?, ?, 'PUBLISHED', 'Agent-assisted listing submission', ?)""",
             (farmer["phone"], farmer["listing_status"], agent_normalized),
         )
+    from app.services.agent_incentive_service import AgentIncentiveService
+    AgentIncentiveService.assign_relationship(
+        agent["id"], farmer["id"], "LISTING_SUPPORT", agent_normalized
+    )
     published = dict(farmer)
     published.update({"crop": product_name, "location": location.strip().title(),
                       "phone": farmer["phone"], "verification_status": "PENDING"})
@@ -274,6 +278,23 @@ def review_product_listing(farmer_phone: str, decision: str, reviewed_by: str,
                VALUES (?, ?, ?, ?, ?)""",
             (listing["phone"], previous_status, new_listing_status,
              rejection_reason.strip() or decision, reviewed_by),
+        )
+
+    if decision in ("VERIFIED", "PUBLISHED"):
+        moderation = fetchone(
+            """SELECT id FROM listing_moderation_log
+               WHERE farmer_phone=? ORDER BY id DESC LIMIT 1""",
+            (listing["phone"],),
+        )
+        from app.services.agent_incentive_service import AgentIncentiveService
+        AgentIncentiveService.evaluate_event(
+            "LISTING_APPROVED", listing["id"],
+            listing_id=moderation["id"] if moderation else None,
+            source_reference=(
+                f"LISTING_MODERATION:{moderation['id']}" if moderation
+                else f"FARMER_LISTING:{listing['id']}"
+            ),
+            metadata={"decision": decision, "reviewed_by": reviewed_by},
         )
 
     return {"ok": True}

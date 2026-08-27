@@ -10,6 +10,8 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 
 from app.models.database import fetchone, get_db
 from app.services import document_storage, product_service, identity_service
+from app.services.agent_incentive_service import AgentIncentiveService
+from app.services.agent_payout_service import AgentPayoutService
 from app.utils.phone import normalize_phone
 from app.utils.security import hash_pin
 
@@ -105,7 +107,13 @@ def logout():
 @agent_login_required
 def dashboard():
     agent = fetchone("SELECT * FROM agents WHERE phone=?", (session["agent_phone"],))
-    return render_template("agent/dashboard.html", agent=dict(agent))
+    earnings = AgentIncentiveService.get_agent_summary(agent["id"])
+    entries = AgentIncentiveService.list_entries(agent_id=agent["id"], limit=12)
+    payout = AgentPayoutService.current_agent_payout(agent["id"])
+    return render_template(
+        "agent/dashboard.html", agent=dict(agent), earnings=earnings,
+        entries=entries, payout=payout,
+    )
 
 
 @agent_web_bp.route("/listings/new", methods=["GET", "POST"])

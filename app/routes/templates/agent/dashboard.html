@@ -8,4 +8,21 @@
   <div class="row"><span>Farmers verified</span><span>{{ agent.recruits }}</span></div>
   <a class="btn" href="{{ url_for('agent_web.new_listing') }}">Submit product listing</a>
 </div>
+<h2 class="section-title">Agent Earnings</h2>
+<p class="muted">Milestone incentives are reviewed and paid in periodic batches. This is an internal earnings record, not a payment wallet.</p>
+<div class="earnings-grid">
+  <div class="metric"><span>Pending</span><strong>NGN {{ '%.2f'|format(earnings.pending_kobo / 100) }}</strong></div>
+  <div class="metric"><span>Approved</span><strong>NGN {{ '%.2f'|format(earnings.approved_kobo / 100) }}</strong></div>
+  <div class="metric"><span>Payable</span><strong>NGN {{ '%.2f'|format(earnings.payable_kobo / 100) }}</strong></div>
+  <div class="metric"><span>Paid to date</span><strong>NGN {{ '%.2f'|format(earnings.paid_kobo / 100) }}</strong></div>
+  <div class="metric"><span>Lifetime gross</span><strong>NGN {{ '%.2f'|format(earnings.lifetime_gross_kobo / 100) }}</strong></div>
+  <div class="metric"><span>Reversed</span><strong>NGN {{ '%.2f'|format(earnings.reversed_kobo / 100) }}</strong></div>
+</div>
+{% if payout %}<div class="card payout-note"><h2>Current payout</h2><div class="row"><span>Period</span><span>{{ payout.period_start }} to {{ payout.period_end }}</span></div><div class="row"><span>Status</span><span>{{ payout.item_status|replace('_', ' ')|title }}</span></div><div class="row"><span>Net amount</span><span>NGN {{ '%.2f'|format(payout.net_payout_amount_kobo / 100) }}</span></div></div>{% endif %}
+<div class="card">
+  <h2>Recent earning activity</h2>
+  <div class="activity-list">
+  {% for entry in entries %}<div class="activity-row"><div><strong>{{ entry.description }}</strong><small>{{ entry.created_at }}{% if entry.farmer_name %} - {{ entry.farmer_name }}{% endif %}</small></div><div class="activity-amount{% if entry.amount_kobo < 0 %} negative{% endif %}">{{ '+' if entry.amount_kobo > 0 else '' }}NGN {{ '%.2f'|format(entry.amount_kobo / 100) }}<small>{{ entry.status|replace('_', ' ')|title }}</small></div></div>{% else %}<p class="muted">No milestone earnings have been recorded yet.</p>{% endfor %}
+  </div>
+</div>
 {% endblock %}

@@ -328,15 +328,20 @@ def confirm_payout_success(transfer_code: str) -> dict:
 
     net_payout = row["farmer_settlement_amount"]
     with get_db() as conn:
-        conn.execute(
-            "UPDATE escrow_ledger SET payout_status='success' WHERE txn_id=?", (row["txn_id"],)
-        )
-        conn.execute(
-            "UPDATE farmers SET credit_score = credit_score + 1 WHERE phone = ?",
-            (row["farmer_phone"],),
-        )
+        changed = conn.execute(
+            """UPDATE escrow_ledger SET payout_status='success'
+               WHERE txn_id=? AND COALESCE(payout_status, '')!='success'""",
+            (row["txn_id"],),
+        ).rowcount
+        if changed:
+            conn.execute(
+                "UPDATE farmers SET credit_score = credit_score + 1 WHERE phone = ?",
+                (row["farmer_phone"],),
+            )
     notify_payment_released(row["farmer_phone"], net_payout, row["txn_id"])
-    return {"ok": True}
+    from app.services.agent_incentive_service import AgentIncentiveService
+    completion = AgentIncentiveService.evaluate_completed_order(row["txn_id"])
+    return {"ok": True, "completion": completion}
 
 
 def mark_payout_failed(transfer_code: str, reason: str) -> dict:
@@ -357,6 +362,11 @@ def mark_payout_failed(transfer_code: str, reason: str) -> dict:
     send_sms(row["farmer_phone"],
               f"Sowtrust: Your payout for TXN {row['txn_id']} failed and will be retried. "
               f"If this persists, dial *709# > 6 to reach an agent.")
+    if "reversed" in (reason or "").lower():
+        from app.services.agent_incentive_service import AgentIncentiveService
+        AgentIncentiveService.reverse_order_incentives(
+            row["txn_id"], reason="Farmer settlement was reversed"
+        )
     return {"ok": True}
 
 

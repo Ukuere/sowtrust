@@ -11,6 +11,7 @@
     <article class="role-card"><h3>Disputes and audit</h3><p>Resolve active disputes and inspect sensitive operations.</p><div class="links"><a href="{{ url_for('admin_disputes.queue') }}">Open disputes</a><a href="{{ url_for('admin_audit.dashboard') }}">View audit log</a></div></article>
     <article class="role-card"><h3>Users</h3><p>Review unified identities, roles, channels and account states.</p><div class="links"><a href="{{ url_for('admin_operations.users') }}">Open user directory</a></div></article>
     <article class="role-card"><h3>Payments and escrow</h3><p>Inspect payment confirmation, payout and escrow records.</p><div class="links"><a href="{{ url_for('admin_operations.payments') }}">Payments</a><a href="{{ url_for('admin_operations.escrow') }}">Escrow</a></div></article>
+    <article class="role-card"><h3>Agent incentives</h3><p>Review milestone earnings, configure policies and prepare payout batches.</p><div class="links"><a href="{{ url_for('admin_incentives.dashboard') }}">Open incentive ledger</a></div></article>
     <article class="role-card"><h3>CEO console</h3><p>Open the protected operations analytics service.</p><div class="links"><a href="{{ url_for('admin_operations.ceo_console') }}">Open console</a></div></article>
   </div>
   <form method="post" action="{{ url_for('staff_auth.logout') }}"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="button outline" type="submit">Log out</button></form>

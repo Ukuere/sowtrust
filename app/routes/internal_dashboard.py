@@ -6,6 +6,7 @@ from flask import Blueprint, abort, jsonify, request
 
 from app.models.database import fetchall, fetchone, get_db
 from app.services import escrow_service
+from app.services.agent_incentive_service import AgentIncentiveService
 from app.utils.phone import normalize_phone
 from config.settings import config
 
@@ -161,6 +162,12 @@ def farmer_action(phone):
             """INSERT INTO audit_log(actor, action, details)
                VALUES ('CEO_CONSOLE', ?, ?)""",
             (action, f"PHONE:{normalized} ACTIVE:{active} REASON:{reason}"),
+        )
+    if action == "VERIFY_PROFILE":
+        AgentIncentiveService.evaluate_event(
+            "FARMER_VERIFIED", farmer["id"],
+            source_reference=f"CEO_CONSOLE:FARMER:{farmer['id']}",
+            metadata={"verification_actor": "CEO_CONSOLE"},
         )
     return jsonify({"ok": True})
 
